@@ -5,8 +5,10 @@
 ## Features
 
 - Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **Google**, **ZipRecruiter**, & other job boards concurrently
+- Remote-only boards: **Remotive**, **RemoteOK**, **WeWorkRemotely**, **Working Nomads**
 - Aggregates the job postings in a dataframe
 - Proxies support to bypass blocking
+- Italian-market helpers (`search_italy`, `search_remote`) that fix km/miles and language mismatches
 
 ![jobspy](https://github.com/cullenwatson/JobSpy/assets/78247585/ec7ef355-05f6-4fd3-8161-a817e31c5c57)
 
@@ -41,6 +43,50 @@ print(jobs.head())
 jobs.to_csv("jobs.csv", quoting=csv.QUOTE_NONNUMERIC, escapechar="\\", index=False) # to_excel
 ```
 
+### Remote-only boards
+
+Four boards that only list remote jobs are supported. They ignore `location` /
+`distance` (every result is remote) and are searched client-side by keyword:
+
+```python
+from jobspy import scrape_jobs
+
+jobs = scrape_jobs(
+    site_name=["remotive", "remoteok", "weworkremotely", "workingnomads"],
+    search_term="python",
+    results_wanted=20,
+    is_remote=True,
+)
+```
+
+- **Remotive** – public JSON API, server-side keyword filter.
+- **RemoteOK** – public JSON API, client-side keyword filter.
+- **WeWorkRemotely** – per-category RSS feeds (programming, full-stack, back-end, front-end, devops, design, product).
+- **Working Nomads** – public JSON API; the `location` field carries the time zone (e.g. `Time zone: CET`), handy for filtering European roles.
+
+### Italian market / remote presets
+
+`jobspy.presets` provides two thin wrappers around `scrape_jobs()` that fix the
+ergonomics that make Italian searches under-perform (distance is in **miles**,
+Italian Indeed/Glassdoor index Italian-language postings, and `country_indeed`
+must be `"Italy"`):
+
+```python
+from jobspy.presets import search_italy, search_remote
+
+# Jobs near Verona — think in KILOMETERS (converted to miles internally),
+# sets country_indeed="Italy" and includes LinkedIn by default.
+df = search_italy("sviluppatore", "Verona, Veneto", distance_km=25)
+
+# Remote-only jobs across all four remote boards.
+df = search_remote("python")
+```
+
+Tips for Italian searches: prefer Italian search terms (`"sviluppatore"` matches
+far more than `"developer"` on `it.indeed.com`), qualify the location with its
+region (`"Verona, Veneto"`), and keep the radius tight — the default 50 miles is
+~80 km.
+
 ### Output
 
 ```
@@ -58,8 +104,9 @@ zip_recruiter Software Developer                 TEKsystems        Phoenix      
 
 ```plaintext
 Optional
-├── site_name (list|str): 
-|    linkedin, zip_recruiter, indeed, glassdoor, google, bayt, bdjobs
+├── site_name (list|str):
+|    linkedin, zip_recruiter, indeed, glassdoor, google, bayt, bdjobs, naukri,
+|    remotive, remoteok, weworkremotely, workingnomads
 |    (default is all)
 │
 ├── search_term (str)

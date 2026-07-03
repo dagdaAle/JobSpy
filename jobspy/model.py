@@ -293,6 +293,11 @@ class Site(Enum):
     BAYT = "bayt"
     NAUKRI = "naukri"
     BDJOBS = "bdjobs"  # Add this line
+    # Remote-only job boards
+    REMOTIVE = "remotive"
+    REMOTEOK = "remoteok"
+    WEWORKREMOTELY = "weworkremotely"
+    WORKINGNOMADS = "workingnomads"
 
 
 class SalarySource(Enum):

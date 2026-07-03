@@ -12,6 +12,10 @@ from jobspy.google import Google
 from jobspy.indeed import Indeed
 from jobspy.linkedin import LinkedIn
 from jobspy.naukri import Naukri
+from jobspy.remotive import Remotive
+from jobspy.remoteok import RemoteOK
+from jobspy.weworkremotely import WeWorkRemotely
+from jobspy.workingnomads import WorkingNomads
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
 from jobspy.util import (
@@ -64,6 +68,10 @@ def scrape_jobs(
         Site.BAYT: BaytScraper,
         Site.NAUKRI: Naukri,
         Site.BDJOBS: BDJobs,  # Add BDJobs to the scraper mapping
+        Site.REMOTIVE: Remotive,
+        Site.REMOTEOK: RemoteOK,
+        Site.WEWORKREMOTELY: WeWorkRemotely,
+        Site.WORKINGNOMADS: WorkingNomads,
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
