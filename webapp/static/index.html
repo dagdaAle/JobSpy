@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JobSpy — Ricerca lavoro</title>
+  <style>
+    :root {
+      --bg: #0f1220; --panel: #1a1f36; --panel2: #232a4d;
+      --text: #e6e8f0; --muted: #9aa3c4; --accent: #6c8cff;
+      --like: #34d399; --dislike: #f87171; --border: #2c3358;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg); color: var(--text); font-size: 14px;
+    }
+    header { padding: 18px 24px; border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0; font-size: 18px; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 12px; color: var(--muted); }
+    input, select, button {
+      font: inherit; color: var(--text); background: var(--panel2);
+      border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    }
+    input:focus, select:focus { outline: 2px solid var(--accent); }
+    button { cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+    button.primary:disabled { opacity: .6; cursor: not-allowed; }
+    button.ghost { background: transparent; }
+
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+    .toolbar .left, .toolbar .right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .muted { color: var(--muted); }
+    .pill { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+    tbody tr:hover { background: var(--panel2); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .fb { display: flex; gap: 6px; }
+    .fb button { padding: 4px 8px; border-radius: 8px; line-height: 1; }
+    .fb button.active-like { background: var(--like); border-color: var(--like); color: #06281c; }
+    .fb button.active-dislike { background: var(--dislike); border-color: var(--dislike); color: #2b0b0b; }
+    tr.disliked { opacity: .4; }
+
+    .badge-remote { color: var(--like); }
+    .error { color: var(--dislike); }
+    .spinner { display: none; }
+    .spinner.on { display: inline; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .checkbox { display: flex; align-items: center; gap: 6px; }
+
+    /* --- AI analysis --- */
+    .score { display: flex; align-items: center; gap: 6px; min-width: 84px; }
+    .score .bar { flex: 1; height: 8px; border-radius: 999px; background: var(--panel2); overflow: hidden; }
+    .score .bar > span { display: block; height: 100%; border-radius: 999px; }
+    .score .num { font-variant-numeric: tabular-nums; font-weight: 600; width: 26px; text-align: right; }
+    .score.na .num { color: var(--muted); font-weight: 400; }
+    .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+    .summary { color: var(--muted); font-size: 12px; max-width: 340px; }
+    .summary details > summary { cursor: pointer; color: var(--accent); list-style: none; }
+    .summary details[open] > summary { margin-bottom: 4px; }
+    .reasons { margin: 4px 0 0; padding-left: 16px; }
+    .reasons li { margin: 2px 0; }
+    .status-banner { font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
+    .status-banner.warn { background: #3a2a12; border: 1px solid #6b4a1e; color: #f0c987; }
+    .status-banner.ok { background: #123a2a; border: 1px solid #1e6b4a; color: #87f0c9; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>JobSpy — Ricerca lavoro</h1>
+    <p>Indeed · Glassdoor · LinkedIn + board remote (Remotive, RemoteOK, WeWorkRemotely, Working Nomads)</p>
+  </header>
+
+  <main>
+    <div id="statusBanner" class="status-banner" style="display:none;"></div>
+
+    <!-- FORM DI RICERCA -->
+    <div class="card">
+      <div class="row">
+        <div class="field">
+          <label>Modalità</label>
+          <select id="mode">
+            <option value="italy">Italia (vicino a una città)</option>
+            <option value="remote">Solo remote</option>
+          </select>
+        </div>
+        <div class="field" style="flex:1; min-width:180px;">
+          <label>Termine di ricerca</label>
+          <input id="search_term" placeholder="es. sviluppatore, python, react" value="sviluppatore" />
+        </div>
+        <div class="field field-italy" style="min-width:180px;">
+          <label>Località (con regione)</label>
+          <input id="location" placeholder="es. Verona, Veneto" value="Verona, Veneto" />
+        </div>
+        <div class="field field-italy">
+          <label>Raggio (km)</label>
+          <input id="distance_km" type="number" min="1" max="500" value="25" style="width:90px;" />
+        </div>
+        <div class="field">
+          <label>Risultati per sito</label>
+          <input id="results_wanted" type="number" min="1" max="500" value="25" style="width:110px;" />
+        </div>
+        <div class="field field-italy">
+          <label>Max ore fa (opz.)</label>
+          <input id="hours_old" type="number" min="1" placeholder="tutti" style="width:110px;" />
+        </div>
+        <div class="field">
+          <button class="primary" id="searchBtn" onclick="doSearch()">Cerca</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div class="checkbox field-italy">
+          <input type="checkbox" id="include_linkedin" checked />
+          <label for="include_linkedin" style="color:var(--muted)">Includi LinkedIn (più lento, può bloccarsi)</label>
+        </div>
+      </div>
+      <div class="hint" id="hint">
+        Suggerimento: usa termini italiani (“sviluppatore” trova più di “developer”) e tieni il raggio stretto.
+      </div>
+    </div>
+
+    <!-- TOOLBAR FILTRI + EXPORT -->
+    <div class="card toolbar">
+      <div class="left">
+        <span class="pill" id="countPill">0 risultati</span>
+        <input id="filterText" placeholder="Filtra per testo…" oninput="render()" style="min-width:180px;" />
+        <select id="filterSite" onchange="render()"><option value="">Tutti i siti</option></select>
+        <select id="filterView" onchange="render()">
+          <option value="all">Tutti</option>
+          <option value="liked">Solo preferiti ♥</option>
+          <option value="hide_disliked">Nascondi scartati</option>
+        </select>
+        <label class="checkbox"><input type="checkbox" id="onlyRemote" onchange="render()" /> <span class="muted">solo remote</span></label>
+        <div class="field" style="gap:2px;">
+          <label style="font-size:11px;">Score min</label>
+          <input id="minScore" type="number" min="0" max="100" placeholder="0" oninput="render()" style="width:80px;" />
+        </div>
+        <select id="sortBy" onchange="render()" title="Ordina">
+          <option value="score">Ordina: rilevanza ↓</option>
+          <option value="none">Ordine originale</option>
+        </select>
+      </div>
+      <div class="right">
+        <span class="spinner muted" id="spinner">⏳ ricerca in corso…</span>
+        <button class="ghost" onclick="exportData('csv')">Export CSV</button>
+        <button class="ghost" onclick="exportData('xlsx')">Export Excel</button>
+      </div>
+    </div>
+
+    <div id="errorBox" class="error" style="margin-bottom:12px;"></div>
+
+    <!-- TABELLA -->
+    <div class="card" style="overflow:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:90px;">Feedback</th>
+            <th style="width:110px;">Score</th>
+            <th style="width:80px;">Sito</th>
+            <th>Titolo</th>
+            <th>Azienda</th>
+            <th>Tag</th>
+            <th>Riassunto</th>
+            <th style="width:70px;">Remote</th>
+            <th style="width:110px;">Data</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    let JOBS = [];            // risultati grezzi dell'ultima ricerca
+    let FEEDBACK = {};        // { job_url: "like" | "dislike" }
+    let ANALYSIS = {};        // { job_url: {tags, summary, relevance_score, reasons} }
+
+    const $ = (id) => document.getElementById(id);
+
+    // Colore della barra score: rosso -> giallo -> verde.
+    function scoreColor(s) {
+      if (s === null || s === undefined) return "var(--muted)";
+      const hue = Math.round((s / 100) * 120); // 0=rosso, 120=verde
+      return `hsl(${hue}, 70%, 45%)`;
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch("/status");
+        if (!res.ok) return;
+        const s = await res.json();
+        const b = $("statusBanner");
+        if (!s.analyzer_configured) {
+          b.className = "status-banner warn";
+          b.style.display = "";
+          b.textContent = "⚠️ Analisi AI non attiva: manca DEEPSEEK_API_KEY nel file .env. La ricerca funziona ma senza tag/score.";
+        } else if (!s.cv_loaded) {
+          b.className = "status-banner warn";
+          b.style.display = "";
+          b.textContent = "⚠️ AI attiva ma CV non caricato: monta il PDF in /data/cv.pdf. Lo score sarà meno preciso.";
+        } else {
+          b.className = "status-banner ok";
+          b.style.display = "";
+          b.textContent = `✓ Analisi AI attiva · CV caricato (${s.cv_chars} caratteri) · max ${s.max_analysis_per_search} analisi per ricerca.`;
+        }
+      } catch (e) { /* status is best-effort */ }
+    }
+    loadStatus();
+
+    // Al caricamento della pagina ripristina i job già salvati (senza ri-scrapare
+    // né rianalizzare). La ricerca resta un'azione esplicita col pulsante "Cerca".
+    async function loadJobs() {
+      try {
+        const res = await fetch("/jobs");
+        if (!res.ok) return;
+        const data = await res.json();
+        JOBS = data.jobs || [];
+        FEEDBACK = data.feedback || {};
+        ANALYSIS = data.analysis || {};
+        rebuildSiteFilter();
+        render();
+      } catch (e) { /* best-effort: se fallisce, la pagina resta vuota */ }
+    }
+    loadJobs();
+
+    // Mostra/nascondi i campi "Italia" a seconda della modalità
+    function syncMode() {
+      const remote = $("mode").value === "remote";
+      document.querySelectorAll(".field-italy").forEach(el => {
+        el.style.display = remote ? "none" : "";
+      });
+    }
+    $("mode").addEventListener("change", syncMode);
+    syncMode();
+
+    async function doSearch() {
+      const btn = $("searchBtn");
+      btn.disabled = true; $("spinner").classList.add("on"); $("errorBox").textContent = "";
+      try {
+        const body = {
+          mode: $("mode").value,
+          search_term: $("search_term").value.trim(),
+          location: $("location").value.trim(),
+          distance_km: parseInt($("distance_km").value || "25", 10),
+          results_wanted: parseInt($("results_wanted").value || "25", 10),
+          hours_old: $("hours_old").value ? parseInt($("hours_old").value, 10) : null,
+          include_linkedin: $("include_linkedin").checked,
+        };
+        const res = await fetch("/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || "Errore sconosciuto");
+        }
+        const data = await res.json();
+        JOBS = data.jobs || [];
+        FEEDBACK = data.feedback || {};
+        ANALYSIS = data.analysis || {};
+        rebuildSiteFilter();
+        render();
+      } catch (e) {
+        $("errorBox").textContent = "⚠️ " + e.message;
+      } finally {
+        btn.disabled = false; $("spinner").classList.remove("on");
+      }
+    }
+
+    function rebuildSiteFilter() {
+      const sel = $("filterSite");
+      const current = sel.value;
+      const sites = [...new Set(JOBS.map(j => j.site).filter(Boolean))].sort();
+      sel.innerHTML = '<option value="">Tutti i siti</option>' +
+        sites.map(s => `<option value="${s}">${s}</option>`).join("");
+      sel.value = current;
+    }
+
+    function visibleJobs() {
+      const text = $("filterText").value.toLowerCase();
+      const site = $("filterSite").value;
+      const view = $("filterView").value;
+      const onlyRemote = $("onlyRemote").checked;
+      const minScore = parseInt($("minScore").value || "0", 10);
+      const sortBy = $("sortBy").value;
+
+      const out = JOBS.filter(j => {
+        const url = j.job_url || "";
+        const fb = FEEDBACK[url];
+        const a = ANALYSIS[url] || {};
+        if (view === "liked" && fb !== "like") return false;
+        if (view === "hide_disliked" && fb === "dislike") return false;
+        if (site && j.site !== site) return false;
+        if (onlyRemote && !(j.is_remote === true || j.is_remote === "True")) return false;
+        if (minScore > 0) {
+          const s = a.relevance_score;
+          if (s === null || s === undefined || s < minScore) return false;
+        }
+        if (text) {
+          const tags = (a.tags || []).join(" ");
+          const hay = [j.title, j.company, j.location, a.summary || "", tags].join(" ").toLowerCase();
+          if (!hay.includes(text)) return false;
+        }
+        return true;
+      });
+
+      if (sortBy === "score") {
+        out.sort((x, y) => {
+          const sx = (ANALYSIS[x.job_url || ""] || {}).relevance_score;
+          const sy = (ANALYSIS[y.job_url || ""] || {}).relevance_score;
+          const vx = (sx === null || sx === undefined) ? -1 : sx;
+          const vy = (sy === null || sy === undefined) ? -1 : sy;
+          return vy - vx;
+        });
+      }
+      return out;
+    }
+
+    function render() {
+      const jobs = visibleJobs();
+      $("countPill").textContent = `${jobs.length} risultati (${JOBS.length} totali)`;
+      const tbody = $("tbody");
+      tbody.innerHTML = "";
+      for (const j of jobs) {
+        const url = j.job_url || "";
+        const fb = FEEDBACK[url];
+        const a = ANALYSIS[url] || {};
+        const tr = document.createElement("tr");
+        if (fb === "dislike") tr.className = "disliked";
+        const remote = (j.is_remote === true || j.is_remote === "True");
+        tr.innerHTML = `
+          <td>
+            <div class="fb">
+              <button title="Mi piace" class="${fb === 'like' ? 'active-like' : ''}"
+                onclick="vote(this,'${encodeURIComponent(url)}','like')">♥</button>
+              <button title="Non mi piace" class="${fb === 'dislike' ? 'active-dislike' : ''}"
+                onclick="vote(this,'${encodeURIComponent(url)}','dislike')">✕</button>
+            </div>
+          </td>
+          <td>${scoreCell(a.relevance_score)}</td>
+          <td>${esc(j.site)}</td>
+          <td>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title)}</td>
+          <td>${esc(j.company)}</td>
+          <td>${tagsCell(a.tags)}</td>
+          <td>${summaryCell(a)}</td>
+          <td>${remote ? '<span class="badge-remote">sì</span>' : ''}</td>
+          <td class="muted">${esc(j.date_posted)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function scoreCell(score) {
+      if (score === null || score === undefined) {
+        return `<div class="score na"><span class="num">–</span></div>`;
+      }
+      const color = scoreColor(score);
+      return `<div class="score" title="Rilevanza vs CV: ${score}/100">
+        <div class="bar"><span style="width:${score}%; background:${color};"></span></div>
+        <span class="num">${score}</span>
+      </div>`;
+    }
+
+    function tagsCell(tags) {
+      if (!tags || !tags.length) return '<span class="muted">–</span>';
+      return `<div class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+    }
+
+    function summaryCell(a) {
+      const summary = a.summary || "";
+      if (!summary) return '<span class="muted">–</span>';
+      const reasons = a.reasons || [];
+      const reasonsHtml = reasons.length
+        ? `<ul class="reasons">${reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`
+        : "";
+      return `<div class="summary"><details>
+        <summary>${esc(summary)}</summary>
+        ${reasonsHtml}
+      </details></div>`;
+    }
+
+    async function vote(el, encUrl, verdict) {
+      const url = decodeURIComponent(encUrl);
+      const current = FEEDBACK[url];
+      const newVerdict = current === verdict ? null : verdict;  // toggle
+      const job = JOBS.find(j => (j.job_url || "") === url) || {};
+      try {
+        const res = await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_url: url, verdict: newVerdict,
+            title: job.title || "", company: job.company || "", site: job.site || "",
+          }),
+        });
+        if (!res.ok) throw new Error("feedback non salvato");
+        if (newVerdict === null) delete FEEDBACK[url];
+        else FEEDBACK[url] = newVerdict;
+        render();
+      } catch (e) {
+        $("errorBox").textContent = "⚠️ " + e.message;
+      }
+    }
+
+    function exportData(fmt) {
+      window.location.href = "/export?format=" + fmt;
+    }
+
+    function esc(v) {
+      if (v === null || v === undefined) return "";
+      return String(v).replace(/[&<>"']/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+  </script>
+</body>
+</html>

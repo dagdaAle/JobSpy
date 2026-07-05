@@ -1,0 +1,18 @@
+# Web layer
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+openpyxl==3.1.5
+
+# AI analysis (DeepSeek is OpenAI-compatible) + CV/PDF parsing
+openai==1.59.6
+pdfplumber==0.11.4
+
+# JobSpy library dependencies (installed from the local ../jobspy package)
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+pandas>=2.1.0
+numpy>=1.26.0
+pydantic>=2.3.0
+tls-client>=1.0.1
+markdownify>=1.1.0
+regex>=2024.4.28

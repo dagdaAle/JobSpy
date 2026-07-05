@@ -1,0 +1,11 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+*.egg-info
+.venv
+venv
+webapp/feedback.db
+*.db
+poetry.lock
+.pre-commit-config.yaml

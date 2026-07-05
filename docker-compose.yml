@@ -1,0 +1,22 @@
+services:
+  jobspy-web:
+    build:
+      context: .
+      dockerfile: webapp/Dockerfile
+    image: jobspy-web:latest
+    container_name: jobspy-web
+    ports:
+      # host 8080 -> container 8000 (8000 spesso occupata in locale)
+      - "8080:8000"
+    # DeepSeek API key (and optional overrides) from local .env (git-ignored).
+    env_file:
+      - .env
+    volumes:
+      # Persist likes/dislikes + analysis DB across container restarts.
+      - feedback-data:/data
+      # Mount the CV read-only so the analyzer can extract its text at startup.
+      - ./webapp/cv/cv.pdf:/data/cv.pdf:ro
+    restart: unless-stopped
+
+volumes:
+  feedback-data:

@@ -8,3 +8,7 @@
 *.pyc
 .env
 dist
+
+# Local CV (personal data) — never commit
+webapp/cv/*.pdf
+*.db
