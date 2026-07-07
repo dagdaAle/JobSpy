@@ -11,6 +11,9 @@ services:
     # DeepSeek API key (and optional overrides) from local .env (git-ignored).
     env_file:
       - .env
+    environment:
+      # Local timezone so the scheduler's daily 09:00 refresh means 09:00 Italian time.
+      - TZ=Europe/Rome
     volumes:
       # Persist likes/dislikes + analysis DB across container restarts.
       - feedback-data:/data

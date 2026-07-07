@@ -16,6 +16,7 @@ This is meant for local, personal use (run via Docker); it does no auth.
 
 from __future__ import annotations
 
+import datetime
 import io
 import math
 import os
@@ -84,8 +85,9 @@ _FULL_COLUMNS = _ANALYSIS_COLUMNS + _RICH_PASSTHROUGH + list(_SALARY_MAP.keys())
 # Cap analyses per search to bound API cost/latency (overridable via env).
 _MAX_ANALYSIS = int(os.environ.get("MAX_ANALYSIS_PER_SEARCH", "30"))
 
-# Refresh every channel this often (seconds). 24h like SubitoWatch.
-_REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_SECONDS", str(24 * 60 * 60)))
+# Hour of the day (local time, 0-23) at which channels refresh. Default 09:00.
+_REFRESH_HOUR = int(os.environ.get("REFRESH_HOUR", "9"))
+_REFRESH_MINUTE = int(os.environ.get("REFRESH_MINUTE", "0"))
 
 # The most recent search result, reused by /export. Single-user local app.
 _last_result: pd.DataFrame = pd.DataFrame()
@@ -141,10 +143,14 @@ def _startup() -> None:
         # CV is optional; never block startup on parsing issues.
         pass
 
-    # Start the background scheduler that refreshes channels every 24h.
+    # Start the background scheduler that refreshes channels daily at a fixed hour.
     thread = threading.Thread(target=_scheduler_loop, daemon=True)
     thread.start()
-    print("[scheduler] started (interval=%ss)" % _REFRESH_INTERVAL, flush=True)
+    print(
+        "[scheduler] started (daily at %02d:%02d local)"
+        % (_REFRESH_HOUR, _REFRESH_MINUTE),
+        flush=True,
+    )
 
 
 def _clean_records(
@@ -245,26 +251,47 @@ def _refresh_channel(channel: dict[str, Any]) -> int:
     return new_count
 
 
-def _scheduler_loop() -> None:
-    """Refresh every channel, then sleep for the interval, forever."""
-    time.sleep(30)  # let the app finish booting before the first pass
-    while True:
+def _seconds_until_next_run() -> float:
+    """Seconds from now until the next _REFRESH_HOUR:_REFRESH_MINUTE (local time)."""
+    now = datetime.datetime.now()
+    target = now.replace(
+        hour=_REFRESH_HOUR, minute=_REFRESH_MINUTE, second=0, microsecond=0
+    )
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def _refresh_all_channels() -> None:
+    """Refresh every channel once, logging per-channel results."""
+    channels = storage.list_channels()
+    for channel in channels:
         try:
-            channels = storage.list_channels()
-            for channel in channels:
-                try:
-                    new_count = _refresh_channel(channel)
-                    print(
-                        "[scheduler] channel %s (%s): %d new"
-                        % (channel["id"], channel["site"], new_count),
-                        flush=True,
-                    )
-                except Exception:
-                    print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
-                    traceback.print_exc()
+            new_count = _refresh_channel(channel)
+            print(
+                "[scheduler] channel %s (%s): %d new"
+                % (channel["id"], channel["site"], new_count),
+                flush=True,
+            )
+        except Exception:
+            print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
+            traceback.print_exc()
+
+
+def _scheduler_loop() -> None:
+    """Sleep until the next daily run time, refresh all channels, repeat."""
+    while True:
+        delay = _seconds_until_next_run()
+        print(
+            "[scheduler] next run in %.0f min (at %02d:%02d local)"
+            % (delay / 60, _REFRESH_HOUR, _REFRESH_MINUTE),
+            flush=True,
+        )
+        time.sleep(delay)
+        try:
+            _refresh_all_channels()
         except Exception:
             traceback.print_exc()
-        time.sleep(_REFRESH_INTERVAL)
 
 
 @app.post("/search")
