@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>JobSpy — Ricerca lavoro</title>
+  <title>JobSpy — Canali lavoro</title>
   <style>
     :root {
       --bg: #0f1220; --panel: #1a1f36; --panel2: #232a4d;
       --text: #e6e8f0; --muted: #9aa3c4; --accent: #6c8cff;
       --like: #34d399; --dislike: #f87171; --border: #2c3358;
+      --new: #f0c987;
     }
     * { box-sizing: border-box; }
     body {
@@ -33,101 +34,143 @@
     button.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
     button.primary:disabled { opacity: .6; cursor: not-allowed; }
     button.ghost { background: transparent; }
+    button.danger { background: transparent; border-color: var(--dislike); color: var(--dislike); }
 
     .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
     .toolbar .left, .toolbar .right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .muted { color: var(--muted); }
     .pill { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); }
-
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
-    tbody tr:hover { background: var(--panel2); }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-
-    .fb { display: flex; gap: 6px; }
-    .fb button { padding: 4px 8px; border-radius: 8px; line-height: 1; }
-    .fb button.active-like { background: var(--like); border-color: var(--like); color: #06281c; }
-    .fb button.active-dislike { background: var(--dislike); border-color: var(--dislike); color: #2b0b0b; }
-    tr.disliked { opacity: .4; }
-
-    .badge-remote { color: var(--like); }
     .error { color: var(--dislike); }
     .spinner { display: none; }
     .spinner.on { display: inline; }
     .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
     .checkbox { display: flex; align-items: center; gap: 6px; }
 
-    /* --- AI analysis --- */
-    .score { display: flex; align-items: center; gap: 6px; min-width: 84px; }
+    /* --- channel chips --- */
+    .channels { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      border-radius: 999px; background: var(--panel2); border: 1px solid var(--border);
+      cursor: pointer; user-select: none;
+    }
+    .chip.active { border-color: var(--accent); background: #2a3566; }
+    .chip .site { font-weight: 600; }
+    .chip .count { font-size: 11px; color: var(--muted); }
+    .chip .newc { color: var(--new); font-weight: 600; }
+    .chip .x { color: var(--muted); font-size: 12px; }
+    .chip .x:hover { color: var(--dislike); }
+
+    /* --- card grid --- */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+    .jobcard {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; display: flex; flex-direction: column; gap: 8px; cursor: pointer;
+      transition: border-color .12s, transform .12s;
+    }
+    .jobcard:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .jobcard.disliked { opacity: .45; }
+    .jc-head { display: flex; gap: 10px; align-items: flex-start; }
+    .jc-logo { width: 40px; height: 40px; border-radius: 8px; object-fit: contain; background: #fff; flex-shrink: 0; }
+    .jc-logo.placeholder { background: var(--panel2); display: flex; align-items: center; justify-content: center; color: var(--muted); font-weight: 700; }
+    .jc-title { font-weight: 600; line-height: 1.25; }
+    .jc-company { color: var(--muted); font-size: 13px; }
+    .jc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .jc-foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+    .badge.remote { color: var(--like); border-color: #1e6b4a; }
+    .badge.new { color: var(--new); border-color: #6b4a1e; }
+    .badge.salary { color: var(--like); }
+    .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+
+    .score { display: flex; align-items: center; gap: 6px; min-width: 90px; }
     .score .bar { flex: 1; height: 8px; border-radius: 999px; background: var(--panel2); overflow: hidden; }
     .score .bar > span { display: block; height: 100%; border-radius: 999px; }
     .score .num { font-variant-numeric: tabular-nums; font-weight: 600; width: 26px; text-align: right; }
     .score.na .num { color: var(--muted); font-weight: 400; }
-    .tags { display: flex; flex-wrap: wrap; gap: 4px; }
-    .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
-    .summary { color: var(--muted); font-size: 12px; max-width: 340px; }
-    .summary details > summary { cursor: pointer; color: var(--accent); list-style: none; }
-    .summary details[open] > summary { margin-bottom: 4px; }
-    .reasons { margin: 4px 0 0; padding-left: 16px; }
-    .reasons li { margin: 2px 0; }
+
+    .fb { display: flex; gap: 6px; }
+    .fb button { padding: 4px 10px; border-radius: 8px; line-height: 1; }
+    .fb button.active-like { background: var(--like); border-color: var(--like); color: #06281c; }
+    .fb button.active-dislike { background: var(--dislike); border-color: var(--dislike); color: #2b0b0b; }
+
     .status-banner { font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
     .status-banner.warn { background: #3a2a12; border: 1px solid #6b4a1e; color: #f0c987; }
     .status-banner.ok { background: #123a2a; border: 1px solid #1e6b4a; color: #87f0c9; }
+
+    /* --- detail overlay --- */
+    .overlay { position: fixed; inset: 0; background: rgba(6,8,18,.7); display: none; z-index: 50; overflow: auto; }
+    .overlay.on { display: block; }
+    .detail { max-width: 900px; margin: 32px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 0; overflow: hidden; }
+    .detail-banner { width: 100%; height: 140px; object-fit: cover; display: block; background: var(--panel2); }
+    .detail-body { padding: 22px 26px; }
+    .detail h2 { margin: 0 0 4px; font-size: 22px; }
+    .detail .company-line { display: flex; align-items: center; gap: 10px; margin: 8px 0 14px; }
+    .detail .company-line img { width: 44px; height: 44px; border-radius: 8px; object-fit: contain; background: #fff; }
+    .detail-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .detail-section { margin: 18px 0; }
+    .detail-section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+    .desc { line-height: 1.55; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+    .desc img { max-width: 100%; }
+    .reasons { margin: 6px 0 0; padding-left: 18px; }
+    .reasons li { margin: 3px 0; }
+    .detail-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; }
+    .kv .k { color: var(--muted); }
+    .closebar { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border); }
   </style>
 </head>
 <body>
   <header>
-    <h1>JobSpy — Ricerca lavoro</h1>
-    <p>Indeed · Glassdoor · LinkedIn + board remote (Remotive, RemoteOK, WeWorkRemotely, Working Nomads)</p>
+    <h1>JobSpy — Canali lavoro</h1>
+    <p>Un canale per sito, auto-aggiornati ogni giorno · Indeed · Glassdoor · LinkedIn · Remotive · RemoteOK · WeWorkRemotely · Working Nomads</p>
   </header>
 
   <main>
     <div id="statusBanner" class="status-banner" style="display:none;"></div>
 
-    <!-- FORM DI RICERCA -->
+    <!-- CANALI -->
     <div class="card">
-      <div class="row">
-        <div class="field">
-          <label>Modalità</label>
-          <select id="mode">
-            <option value="italy">Italia (vicino a una città)</option>
-            <option value="remote">Solo remote</option>
-          </select>
-        </div>
-        <div class="field" style="flex:1; min-width:180px;">
-          <label>Termine di ricerca</label>
-          <input id="search_term" placeholder="es. sviluppatore, python, react" value="sviluppatore" />
-        </div>
-        <div class="field field-italy" style="min-width:180px;">
-          <label>Località (con regione)</label>
-          <input id="location" placeholder="es. Verona, Veneto" value="Verona, Veneto" />
-        </div>
-        <div class="field field-italy">
-          <label>Raggio (km)</label>
-          <input id="distance_km" type="number" min="1" max="500" value="25" style="width:90px;" />
-        </div>
-        <div class="field">
-          <label>Risultati per sito</label>
-          <input id="results_wanted" type="number" min="1" max="500" value="25" style="width:110px;" />
-        </div>
-        <div class="field field-italy">
-          <label>Max ore fa (opz.)</label>
-          <input id="hours_old" type="number" min="1" placeholder="tutti" style="width:110px;" />
-        </div>
-        <div class="field">
-          <button class="primary" id="searchBtn" onclick="doSearch()">Cerca</button>
-        </div>
+      <div class="toolbar" style="margin-bottom:12px;">
+        <strong>Canali</strong>
+        <button class="ghost" id="toggleForm" onclick="toggleChannelForm()">+ Nuovo canale</button>
       </div>
-      <div class="row" style="margin-top:10px;">
-        <div class="checkbox field-italy">
-          <input type="checkbox" id="include_linkedin" checked />
-          <label for="include_linkedin" style="color:var(--muted)">Includi LinkedIn (più lento, può bloccarsi)</label>
+      <div class="channels" id="channelChips"></div>
+
+      <!-- form nuovo canale -->
+      <div id="channelForm" class="card" style="display:none; margin-top:14px; margin-bottom:0; background:var(--panel2);">
+        <div class="row">
+          <div class="field">
+            <label>Sito</label>
+            <select id="ch_site" onchange="syncChannelForm()"></select>
+          </div>
+          <div class="field" style="flex:1; min-width:160px;">
+            <label>Termine di ricerca</label>
+            <input id="ch_search_term" placeholder="es. sviluppatore, python" value="sviluppatore" />
+          </div>
+          <div class="field field-local" style="min-width:150px;">
+            <label>Località (con regione)</label>
+            <input id="ch_location" placeholder="es. Verona, Veneto" value="Verona, Veneto" />
+          </div>
+          <div class="field field-local">
+            <label>Raggio (km)</label>
+            <input id="ch_distance_km" type="number" min="1" max="500" value="25" style="width:90px;" />
+          </div>
+          <div class="field">
+            <label>Risultati</label>
+            <input id="ch_results_wanted" type="number" min="1" max="500" value="25" style="width:100px;" />
+          </div>
+          <div class="field field-local">
+            <label>Max ore fa (opz.)</label>
+            <input id="ch_hours_old" type="number" min="1" placeholder="tutti" style="width:100px;" />
+          </div>
+          <div class="field">
+            <button class="primary" id="createBtn" onclick="createChannel()">Crea + scarica</button>
+          </div>
         </div>
-      </div>
-      <div class="hint" id="hint">
-        Suggerimento: usa termini italiani (“sviluppatore” trova più di “developer”) e tieni il raggio stretto.
+        <div class="hint" id="ch_hint">Il canale scarica subito i lavori e poi si aggiorna da solo ogni 24h.</div>
       </div>
     </div>
 
@@ -136,7 +179,6 @@
       <div class="left">
         <span class="pill" id="countPill">0 risultati</span>
         <input id="filterText" placeholder="Filtra per testo…" oninput="render()" style="min-width:180px;" />
-        <select id="filterSite" onchange="render()"><option value="">Tutti i siti</option></select>
         <select id="filterView" onchange="render()">
           <option value="all">Tutti</option>
           <option value="liked">Solo preferiti ♥</option>
@@ -149,11 +191,13 @@
         </div>
         <select id="sortBy" onchange="render()" title="Ordina">
           <option value="score">Ordina: rilevanza ↓</option>
+          <option value="new">Nuovi prima</option>
           <option value="none">Ordine originale</option>
         </select>
       </div>
       <div class="right">
-        <span class="spinner muted" id="spinner">⏳ ricerca in corso…</span>
+        <span class="spinner muted" id="spinner">⏳ operazione in corso…</span>
+        <button class="ghost" id="refreshBtn" onclick="refreshCurrent()" title="Aggiorna il canale selezionato">↻ Aggiorna</button>
         <button class="ghost" onclick="exportData('csv')">Export CSV</button>
         <button class="ghost" onclick="exportData('xlsx')">Export Excel</button>
       </div>
@@ -161,41 +205,50 @@
 
     <div id="errorBox" class="error" style="margin-bottom:12px;"></div>
 
-    <!-- TABELLA -->
-    <div class="card" style="overflow:auto;">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:90px;">Feedback</th>
-            <th style="width:110px;">Score</th>
-            <th style="width:80px;">Sito</th>
-            <th>Titolo</th>
-            <th>Azienda</th>
-            <th>Tag</th>
-            <th>Riassunto</th>
-            <th style="width:70px;">Remote</th>
-            <th style="width:110px;">Data</th>
-          </tr>
-        </thead>
-        <tbody id="tbody"></tbody>
-      </table>
+    <!-- GRIGLIA CARD -->
+    <div class="grid" id="grid"></div>
+    <div id="emptyState" class="muted" style="display:none; padding:40px; text-align:center;">
+      Nessun lavoro qui. Crea un canale o aggiorna quello selezionato.
     </div>
   </main>
 
+  <!-- DETAIL OVERLAY -->
+  <div class="overlay" id="overlay" onclick="onOverlayClick(event)">
+    <div class="detail" id="detail"></div>
+  </div>
+
   <script>
-    let JOBS = [];            // risultati grezzi dell'ultima ricerca
+    let CHANNELS = [];        // [{id, name, site, ..., total_count, new_count}]
+    let CURRENT = "all";      // "all" oppure channel id
+    let JOBS = [];            // card records della vista corrente
     let FEEDBACK = {};        // { job_url: "like" | "dislike" }
     let ANALYSIS = {};        // { job_url: {tags, summary, relevance_score, reasons} }
+    let SITES = [];
 
     const $ = (id) => document.getElementById(id);
 
-    // Colore della barra score: rosso -> giallo -> verde.
     function scoreColor(s) {
       if (s === null || s === undefined) return "var(--muted)";
-      const hue = Math.round((s / 100) * 120); // 0=rosso, 120=verde
+      const hue = Math.round((s / 100) * 120);
       return `hsl(${hue}, 70%, 45%)`;
     }
+    function esc(v) {
+      if (v === null || v === undefined) return "";
+      return String(v).replace(/[&<>"']/g, c =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function isRemote(j) { return j.is_remote === true || j.is_remote === "True"; }
+    function salaryText(j) {
+      const min = j.salary_min, max = j.salary_max;
+      if (!min && !max) return "";
+      const cur = j.salary_currency || "";
+      const iv = j.salary_interval ? "/" + j.salary_interval : "";
+      const n = (v) => v ? Math.round(parseFloat(v)).toLocaleString("it-IT") : "";
+      if (min && max) return `${cur} ${n(min)}–${n(max)}${iv}`.trim();
+      return `${cur} ${n(min || max)}${iv}`.trim();
+    }
 
+    // ---------------- status ----------------
     async function loadStatus() {
       try {
         const res = await fetch("/status");
@@ -203,64 +256,93 @@
         const s = await res.json();
         const b = $("statusBanner");
         if (!s.analyzer_configured) {
-          b.className = "status-banner warn";
-          b.style.display = "";
-          b.textContent = "⚠️ Analisi AI non attiva: manca DEEPSEEK_API_KEY nel file .env. La ricerca funziona ma senza tag/score.";
+          b.className = "status-banner warn"; b.style.display = "";
+          b.textContent = "⚠️ Analisi AI non attiva: manca DEEPSEEK_API_KEY nel file .env.";
         } else if (!s.cv_loaded) {
-          b.className = "status-banner warn";
-          b.style.display = "";
-          b.textContent = "⚠️ AI attiva ma CV non caricato: monta il PDF in /data/cv.pdf. Lo score sarà meno preciso.";
+          b.className = "status-banner warn"; b.style.display = "";
+          b.textContent = "⚠️ AI attiva ma CV non caricato: monta il PDF in /data/cv.pdf.";
         } else {
-          b.className = "status-banner ok";
-          b.style.display = "";
-          b.textContent = `✓ Analisi AI attiva · CV caricato (${s.cv_chars} caratteri) · max ${s.max_analysis_per_search} analisi per ricerca.`;
+          b.className = "status-banner ok"; b.style.display = "";
+          b.textContent = `✓ Analisi AI attiva · CV caricato (${s.cv_chars} caratteri) · max ${s.max_analysis_per_search} analisi.`;
         }
-      } catch (e) { /* status is best-effort */ }
+      } catch (e) { /* best-effort */ }
     }
-    loadStatus();
 
-    // Al caricamento della pagina ripristina i job già salvati (senza ri-scrapare
-    // né rianalizzare). La ricerca resta un'azione esplicita col pulsante "Cerca".
-    async function loadJobs() {
+    // ---------------- channels ----------------
+    async function loadChannels() {
       try {
-        const res = await fetch("/jobs");
+        const res = await fetch("/channels");
         if (!res.ok) return;
         const data = await res.json();
-        JOBS = data.jobs || [];
-        FEEDBACK = data.feedback || {};
-        ANALYSIS = data.analysis || {};
-        rebuildSiteFilter();
-        render();
-      } catch (e) { /* best-effort: se fallisce, la pagina resta vuota */ }
+        CHANNELS = data.channels || [];
+        SITES = data.sites || [];
+        rebuildSiteSelect();
+        renderChips();
+      } catch (e) { /* best-effort */ }
     }
-    loadJobs();
 
-    // Mostra/nascondi i campi "Italia" a seconda della modalità
-    function syncMode() {
-      const remote = $("mode").value === "remote";
-      document.querySelectorAll(".field-italy").forEach(el => {
+    function rebuildSiteSelect() {
+      const sel = $("ch_site");
+      if (!sel) return;
+      sel.innerHTML = SITES.map(s => `<option value="${s}">${s}</option>`).join("");
+      syncChannelForm();
+    }
+
+    // Remote-only boards hide the location/distance/hours fields.
+    const REMOTE_SITES = ["remotive", "remoteok", "weworkremotely", "workingnomads"];
+    function syncChannelForm() {
+      const site = $("ch_site").value;
+      const remote = REMOTE_SITES.includes(site);
+      document.querySelectorAll(".field-local").forEach(el => {
         el.style.display = remote ? "none" : "";
       });
     }
-    $("mode").addEventListener("change", syncMode);
-    syncMode();
+    function toggleChannelForm() {
+      const f = $("channelForm");
+      f.style.display = f.style.display === "none" ? "" : "none";
+    }
 
-    async function doSearch() {
-      const btn = $("searchBtn");
+    function renderChips() {
+      const box = $("channelChips");
+      const totalAll = CHANNELS.reduce((a, c) => a + (c.total_count || 0), 0);
+      let html = `<div class="chip ${CURRENT === 'all' ? 'active' : ''}" onclick="selectChannel('all')">
+        <span class="site">Tutti</span><span class="count">${totalAll}</span></div>`;
+      for (const c of CHANNELS) {
+        const isActive = String(CURRENT) === String(c.id);
+        const newBadge = c.new_count ? `<span class="newc">+${c.new_count}</span>` : "";
+        html += `<div class="chip ${isActive ? 'active' : ''}" onclick="selectChannel('${c.id}')" title="${esc(c.search_term)}${c.location ? ' · ' + esc(c.location) : ''}">
+          <span class="site">${esc(c.site)}</span>
+          <span class="count">${c.total_count || 0} ${newBadge}</span>
+          <span class="x" title="Elimina canale" onclick="event.stopPropagation(); deleteChannel('${c.id}')">✕</span>
+        </div>`;
+      }
+      box.innerHTML = html;
+    }
+
+    async function selectChannel(id) {
+      CURRENT = id;
+      renderChips();
+      await loadCurrentJobs();
+    }
+
+    async function createChannel() {
+      const btn = $("createBtn");
+      const site = $("ch_site").value;
+      const remote = REMOTE_SITES.includes(site);
+      const body = {
+        site,
+        search_term: $("ch_search_term").value.trim(),
+        location: remote ? "" : $("ch_location").value.trim(),
+        distance_km: parseInt($("ch_distance_km").value || "25", 10),
+        results_wanted: parseInt($("ch_results_wanted").value || "25", 10),
+        hours_old: (!remote && $("ch_hours_old").value) ? parseInt($("ch_hours_old").value, 10) : null,
+        is_remote: remote,
+      };
+      if (!body.search_term) { $("errorBox").textContent = "⚠️ Inserisci un termine di ricerca."; return; }
       btn.disabled = true; $("spinner").classList.add("on"); $("errorBox").textContent = "";
       try {
-        const body = {
-          mode: $("mode").value,
-          search_term: $("search_term").value.trim(),
-          location: $("location").value.trim(),
-          distance_km: parseInt($("distance_km").value || "25", 10),
-          results_wanted: parseInt($("results_wanted").value || "25", 10),
-          hours_old: $("hours_old").value ? parseInt($("hours_old").value, 10) : null,
-          include_linkedin: $("include_linkedin").checked,
-        };
-        const res = await fetch("/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch("/channels", {
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
         if (!res.ok) {
@@ -268,11 +350,9 @@
           throw new Error(err.detail || "Errore sconosciuto");
         }
         const data = await res.json();
-        JOBS = data.jobs || [];
-        FEEDBACK = data.feedback || {};
-        ANALYSIS = data.analysis || {};
-        rebuildSiteFilter();
-        render();
+        await loadChannels();
+        toggleChannelForm();
+        if (data.channel) await selectChannel(String(data.channel.id));
       } catch (e) {
         $("errorBox").textContent = "⚠️ " + e.message;
       } finally {
@@ -280,18 +360,57 @@
       }
     }
 
-    function rebuildSiteFilter() {
-      const sel = $("filterSite");
-      const current = sel.value;
-      const sites = [...new Set(JOBS.map(j => j.site).filter(Boolean))].sort();
-      sel.innerHTML = '<option value="">Tutti i siti</option>' +
-        sites.map(s => `<option value="${s}">${s}</option>`).join("");
-      sel.value = current;
+    async function deleteChannel(id) {
+      if (!confirm("Eliminare questo canale? I lavori restano salvati.")) return;
+      try {
+        const res = await fetch("/channels/" + id, { method: "DELETE" });
+        if (!res.ok) throw new Error("eliminazione fallita");
+        if (String(CURRENT) === String(id)) CURRENT = "all";
+        await loadChannels();
+        await loadCurrentJobs();
+      } catch (e) { $("errorBox").textContent = "⚠️ " + e.message; }
+    }
+
+    async function refreshCurrent() {
+      const btn = $("refreshBtn");
+      btn.disabled = true; $("spinner").classList.add("on"); $("errorBox").textContent = "";
+      try {
+        if (CURRENT === "all") {
+          for (const c of CHANNELS) {
+            await fetch("/channels/" + c.id + "/refresh", { method: "POST" });
+          }
+        } else {
+          const res = await fetch("/channels/" + CURRENT + "/refresh", { method: "POST" });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || "refresh fallito");
+          }
+        }
+        await loadChannels();
+        await loadCurrentJobs();
+      } catch (e) {
+        $("errorBox").textContent = "⚠️ " + e.message;
+      } finally {
+        btn.disabled = false; $("spinner").classList.remove("on");
+      }
+    }
+
+    // ---------------- jobs ----------------
+    async function loadCurrentJobs() {
+      const url = CURRENT === "all" ? "/jobs" : ("/channels/" + CURRENT + "/jobs");
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        JOBS = data.jobs || [];
+        FEEDBACK = data.feedback || {};
+        ANALYSIS = data.analysis || {};
+        render();
+      } catch (e) { /* best-effort */ }
     }
 
     function visibleJobs() {
       const text = $("filterText").value.toLowerCase();
-      const site = $("filterSite").value;
       const view = $("filterView").value;
       const onlyRemote = $("onlyRemote").checked;
       const minScore = parseInt($("minScore").value || "0", 10);
@@ -303,8 +422,7 @@
         const a = ANALYSIS[url] || {};
         if (view === "liked" && fb !== "like") return false;
         if (view === "hide_disliked" && fb === "dislike") return false;
-        if (site && j.site !== site) return false;
-        if (onlyRemote && !(j.is_remote === true || j.is_remote === "True")) return false;
+        if (onlyRemote && !isRemote(j)) return false;
         if (minScore > 0) {
           const s = a.relevance_score;
           if (s === null || s === undefined || s < minScore) return false;
@@ -318,49 +436,69 @@
       });
 
       if (sortBy === "score") {
-        out.sort((x, y) => {
-          const sx = (ANALYSIS[x.job_url || ""] || {}).relevance_score;
-          const sy = (ANALYSIS[y.job_url || ""] || {}).relevance_score;
-          const vx = (sx === null || sx === undefined) ? -1 : sx;
-          const vy = (sy === null || sy === undefined) ? -1 : sy;
-          return vy - vx;
-        });
+        out.sort((x, y) => scoreOf(y) - scoreOf(x));
+      } else if (sortBy === "new") {
+        out.sort((x, y) => (y.is_new ? 1 : 0) - (x.is_new ? 1 : 0));
       }
       return out;
+    }
+    function scoreOf(j) {
+      const s = (ANALYSIS[j.job_url || ""] || {}).relevance_score;
+      return (s === null || s === undefined) ? -1 : s;
     }
 
     function render() {
       const jobs = visibleJobs();
-      $("countPill").textContent = `${jobs.length} risultati (${JOBS.length} totali)`;
-      const tbody = $("tbody");
-      tbody.innerHTML = "";
-      for (const j of jobs) {
-        const url = j.job_url || "";
-        const fb = FEEDBACK[url];
-        const a = ANALYSIS[url] || {};
-        const tr = document.createElement("tr");
-        if (fb === "dislike") tr.className = "disliked";
-        const remote = (j.is_remote === true || j.is_remote === "True");
-        tr.innerHTML = `
-          <td>
-            <div class="fb">
-              <button title="Mi piace" class="${fb === 'like' ? 'active-like' : ''}"
-                onclick="vote(this,'${encodeURIComponent(url)}','like')">♥</button>
-              <button title="Non mi piace" class="${fb === 'dislike' ? 'active-dislike' : ''}"
-                onclick="vote(this,'${encodeURIComponent(url)}','dislike')">✕</button>
-            </div>
-          </td>
-          <td>${scoreCell(a.relevance_score)}</td>
-          <td>${esc(j.site)}</td>
-          <td>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title)}</td>
-          <td>${esc(j.company)}</td>
-          <td>${tagsCell(a.tags)}</td>
-          <td>${summaryCell(a)}</td>
-          <td>${remote ? '<span class="badge-remote">sì</span>' : ''}</td>
-          <td class="muted">${esc(j.date_posted)}</td>
-        `;
-        tbody.appendChild(tr);
-      }
+      $("countPill").textContent = `${jobs.length} risultati (${JOBS.length} nel canale)`;
+      const grid = $("grid");
+      grid.innerHTML = "";
+      $("emptyState").style.display = jobs.length ? "none" : "";
+      for (const j of jobs) grid.appendChild(cardEl(j));
+    }
+
+    function cardEl(j) {
+      const url = j.job_url || "";
+      const fb = FEEDBACK[url];
+      const a = ANALYSIS[url] || {};
+      const el = document.createElement("div");
+      el.className = "jobcard" + (fb === "dislike" ? " disliked" : "");
+      el.onclick = () => openDetail(url);
+
+      const logo = j.company_logo
+        ? `<img class="jc-logo" src="${esc(j.company_logo)}" alt="" onerror="this.style.display='none'">`
+        : `<div class="jc-logo placeholder">${esc((j.company || "?").slice(0,1).toUpperCase())}</div>`;
+
+      const sal = salaryText(j);
+      const meta = [];
+      meta.push(`<span class="badge">${esc(j.site)}</span>`);
+      if (j.location) meta.push(`<span class="badge">${esc(j.location)}</span>`);
+      if (isRemote(j)) meta.push(`<span class="badge remote">remote</span>`);
+      if (sal) meta.push(`<span class="badge salary">${esc(sal)}</span>`);
+      if (j.is_new) meta.push(`<span class="badge new">nuovo</span>`);
+
+      const tags = (a.tags || []).slice(0, 4)
+        .map(t => `<span class="tag">${esc(t)}</span>`).join("");
+
+      el.innerHTML = `
+        <div class="jc-head">
+          ${logo}
+          <div>
+            <div class="jc-title">${esc(j.title)}</div>
+            <div class="jc-company">${esc(j.company)}</div>
+          </div>
+        </div>
+        <div class="jc-meta">${meta.join("")}</div>
+        ${tags ? `<div class="tags">${tags}</div>` : ""}
+        <div class="jc-foot">
+          ${scoreCell(a.relevance_score)}
+          <div class="fb" onclick="event.stopPropagation()">
+            <button title="Mi piace" class="${fb === 'like' ? 'active-like' : ''}"
+              onclick="vote('${encodeURIComponent(url)}','like')">♥</button>
+            <button title="Non mi piace" class="${fb === 'dislike' ? 'active-dislike' : ''}"
+              onclick="vote('${encodeURIComponent(url)}','dislike')">✕</button>
+          </div>
+        </div>`;
+      return el;
     }
 
     function scoreCell(score) {
@@ -370,60 +508,149 @@
       const color = scoreColor(score);
       return `<div class="score" title="Rilevanza vs CV: ${score}/100">
         <div class="bar"><span style="width:${score}%; background:${color};"></span></div>
-        <span class="num">${score}</span>
-      </div>`;
+        <span class="num">${score}</span></div>`;
     }
 
-    function tagsCell(tags) {
-      if (!tags || !tags.length) return '<span class="muted">–</span>';
-      return `<div class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+    // ---------------- detail page ----------------
+    async function openDetail(url) {
+      if (!url) return;
+      location.hash = "job=" + encodeURIComponent(url);
+    }
+    function closeDetail() {
+      if (location.hash) location.hash = "";
+      else showDetail(null);
+    }
+    function onOverlayClick(e) {
+      if (e.target === $("overlay")) closeDetail();
     }
 
-    function summaryCell(a) {
-      const summary = a.summary || "";
-      if (!summary) return '<span class="muted">–</span>';
-      const reasons = a.reasons || [];
-      const reasonsHtml = reasons.length
-        ? `<ul class="reasons">${reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`
-        : "";
-      return `<div class="summary"><details>
-        <summary>${esc(summary)}</summary>
-        ${reasonsHtml}
-      </details></div>`;
+    async function handleHash() {
+      const m = location.hash.match(/job=([^&]+)/);
+      if (!m) { showDetail(null); return; }
+      const url = decodeURIComponent(m[1]);
+      try {
+        const res = await fetch("/job?url=" + encodeURIComponent(url));
+        if (!res.ok) throw new Error("lavoro non trovato");
+        const data = await res.json();
+        showDetail(data);
+      } catch (e) {
+        $("errorBox").textContent = "⚠️ " + e.message;
+        showDetail(null);
+      }
     }
 
-    async function vote(el, encUrl, verdict) {
+    function showDetail(data) {
+      const ov = $("overlay");
+      if (!data) { ov.classList.remove("on"); document.body.style.overflow = ""; return; }
+      const j = data.job || {};
+      const a = data.analysis || null;
+      const fb = data.feedback || null;
+      const url = j.job_url || "";
+      const sal = salaryText(j);
+
+      const banner = j.banner_photo_url
+        ? `<img class="detail-banner" src="${esc(j.banner_photo_url)}" alt="" onerror="this.style.display='none'">` : "";
+      const logo = j.company_logo
+        ? `<img src="${esc(j.company_logo)}" alt="" onerror="this.style.display='none'">` : "";
+
+      const meta = [];
+      meta.push(`<span class="badge">${esc(j.site)}</span>`);
+      if (j.location) meta.push(`<span class="badge">${esc(j.location)}</span>`);
+      if (isRemote(j)) meta.push(`<span class="badge remote">remote</span>`);
+      if (j.job_type) meta.push(`<span class="badge">${esc(j.job_type)}</span>`);
+      if (j.job_level) meta.push(`<span class="badge">${esc(j.job_level)}</span>`);
+      if (sal) meta.push(`<span class="badge salary">${esc(sal)}</span>`);
+      if (j.date_posted) meta.push(`<span class="badge">${esc(j.date_posted)}</span>`);
+
+      // company facts
+      const kv = [];
+      if (j.company_industry) kv.push(["Settore", esc(j.company_industry)]);
+      if (j.job_function) kv.push(["Funzione", esc(j.job_function)]);
+      if (j.company_url) kv.push(["Azienda", `<a href="${esc(j.company_url)}" target="_blank" rel="noopener">${esc(j.company_url)}</a>`]);
+      if (j.emails) kv.push(["Email", esc(j.emails)]);
+      if (j.skills) kv.push(["Competenze", esc(j.skills)]);
+      const kvHtml = kv.length
+        ? `<div class="detail-section"><h3>Dettagli azienda</h3><div class="kv">${kv.map(([k,v]) => `<span class="k">${k}</span><span>${v}</span>`).join("")}</div></div>` : "";
+
+      // AI block
+      let ai = "";
+      if (a) {
+        const tags = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+        const reasons = (a.reasons || []).map(r => `<li>${esc(r)}</li>`).join("");
+        ai = `<div class="detail-section"><h3>Analisi AI</h3>
+          <div style="margin-bottom:10px; max-width:260px;">${scoreCell(a.relevance_score)}</div>
+          ${a.summary ? `<p class="desc">${esc(a.summary)}</p>` : ""}
+          ${tags ? `<div class="tags" style="margin:8px 0;">${tags}</div>` : ""}
+          ${reasons ? `<ul class="reasons">${reasons}</ul>` : ""}
+        </div>`;
+      }
+
+      const desc = j.description
+        ? `<div class="detail-section"><h3>Descrizione</h3><div class="desc">${esc(j.description)}</div></div>` : "";
+
+      $("detail").innerHTML = `
+        <div class="closebar">
+          <button class="ghost" onclick="closeDetail()">← Indietro</button>
+          <div class="fb">
+            <button class="${fb === 'like' ? 'active-like' : ''}" onclick="voteDetail('${encodeURIComponent(url)}','like')">♥ Mi piace</button>
+            <button class="${fb === 'dislike' ? 'active-dislike' : ''}" onclick="voteDetail('${encodeURIComponent(url)}','dislike')">✕ Scarta</button>
+          </div>
+        </div>
+        ${banner}
+        <div class="detail-body">
+          <h2>${esc(j.title)}</h2>
+          <div class="company-line">${logo}<div><strong>${esc(j.company)}</strong></div></div>
+          <div class="detail-meta">${meta.join("")}</div>
+          ${ai}
+          ${kvHtml}
+          ${desc}
+          <div class="detail-actions">
+            ${url ? `<a class="badge" href="${esc(url)}" target="_blank" rel="noopener">Apri annuncio ↗</a>` : ""}
+            ${j.job_url_direct ? `<a class="badge" href="${esc(j.job_url_direct)}" target="_blank" rel="noopener">Link diretto ↗</a>` : ""}
+          </div>
+        </div>`;
+      ov.classList.add("on");
+      document.body.style.overflow = "hidden";
+    }
+
+    // ---------------- feedback ----------------
+    async function vote(encUrl, verdict) {
       const url = decodeURIComponent(encUrl);
       const current = FEEDBACK[url];
-      const newVerdict = current === verdict ? null : verdict;  // toggle
+      const newVerdict = current === verdict ? null : verdict;
       const job = JOBS.find(j => (j.job_url || "") === url) || {};
       try {
         const res = await fetch("/feedback", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             job_url: url, verdict: newVerdict,
             title: job.title || "", company: job.company || "", site: job.site || "",
           }),
         });
         if (!res.ok) throw new Error("feedback non salvato");
-        if (newVerdict === null) delete FEEDBACK[url];
-        else FEEDBACK[url] = newVerdict;
+        if (newVerdict === null) delete FEEDBACK[url]; else FEEDBACK[url] = newVerdict;
         render();
-      } catch (e) {
-        $("errorBox").textContent = "⚠️ " + e.message;
-      }
+      } catch (e) { $("errorBox").textContent = "⚠️ " + e.message; }
     }
 
-    function exportData(fmt) {
-      window.location.href = "/export?format=" + fmt;
+    async function voteDetail(encUrl, verdict) {
+      await vote(encUrl, verdict);
+      // re-render the detail buttons state
+      const url = decodeURIComponent(encUrl);
+      const m = location.hash.match(/job=([^&]+)/);
+      if (m && decodeURIComponent(m[1]) === url) handleHash();
     }
 
-    function esc(v) {
-      if (v === null || v === undefined) return "";
-      return String(v).replace(/[&<>"']/g, c =>
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    }
+    function exportData(fmt) { window.location.href = "/export?format=" + fmt; }
+
+    // ---------------- boot ----------------
+    window.addEventListener("hashchange", handleHash);
+    (async function boot() {
+      await loadStatus();
+      await loadChannels();
+      await loadCurrentJobs();
+      handleHash();
+    })();
   </script>
 </body>
 </html>

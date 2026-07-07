@@ -16,6 +16,8 @@ the raw API:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 from jobspy import scrape_jobs
@@ -71,6 +73,73 @@ def search_italy(
         hours_old=hours_old,
         **kwargs,
     )
+
+
+def search_site(
+    site: str,
+    search_term: str,
+    *,
+    location: str = "",
+    distance_km: int = 25,
+    results_wanted: int = 25,
+    hours_old: int | None = None,
+    is_remote: bool = False,
+    **kwargs,
+) -> pd.DataFrame:
+    """
+    Scrape a **single** job board with one query, returning the full DataFrame
+    (no columns dropped). This is the per-site "channel" primitive.
+
+    Two worlds are handled automatically:
+
+    * Local Italian boards (``indeed``, ``glassdoor``, ``linkedin``) get
+      ``location``, ``distance`` (km -> miles), ``country_indeed="Italy"`` and
+      ``hours_old``. For ``indeed``/``linkedin`` we set
+      ``linkedin_fetch_description=True`` so the full description is fetched
+      (needed by the detail page).
+    * Remote-only boards (``remotive``, ``remoteok``, ``weworkremotely``,
+      ``workingnomads``) are scraped with ``is_remote=True`` and no
+      location/distance.
+
+    :param site: one site name, e.g. ``"indeed"`` or ``"remotive"``.
+    :param search_term: the query for that site.
+    :param location: city (Italian boards only), e.g. ``"Verona, Veneto"``.
+    :param distance_km: radius in KILOMETERS (Italian boards only).
+    :param results_wanted: number of results to fetch.
+    :param hours_old: only jobs posted within N hours (optional).
+    :param is_remote: force a remote search (implied for remote-only boards).
+    """
+    site = site.strip().lower()
+
+    if site in REMOTE_ONLY_SITES:
+        return scrape_jobs(
+            site_name=[site],
+            search_term=search_term,
+            results_wanted=results_wanted,
+            is_remote=True,
+            **kwargs,
+        )
+
+    # Local Italian boards (indeed / glassdoor / linkedin) — and any other site
+    # treated as location-aware.
+    params: dict[str, Any] = {
+        "site_name": [site],
+        "search_term": search_term,
+        "results_wanted": results_wanted,
+        "country_indeed": "Italy",
+        "is_remote": is_remote,
+    }
+    if location:
+        params["location"] = location
+        params["distance"] = km_to_miles(distance_km)
+    if hours_old is not None:
+        params["hours_old"] = hours_old
+    if site in ("indeed", "linkedin"):
+        # Fetch full descriptions so the detail page has rich content.
+        params["linkedin_fetch_description"] = True
+
+    params.update(kwargs)
+    return scrape_jobs(**params)
 
 
 def search_remote(

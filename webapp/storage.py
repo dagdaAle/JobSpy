@@ -20,6 +20,25 @@ Verdict = Literal["like", "dislike"]
 _DB_PATH = os.environ.get("FEEDBACK_DB", "feedback.db")
 _lock = threading.Lock()
 
+# Rich columns added to the `jobs` table via idempotent migration. These are the
+# extra fields JobSpy already returns but that the original app dropped; they
+# power the detail page and richer cards. All are stored as TEXT (stringified).
+_RICH_JOB_COLUMNS = (
+    "job_url_direct",
+    "company_url",
+    "company_industry",
+    "company_logo",
+    "banner_photo_url",
+    "job_level",
+    "job_function",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_interval",
+    "emails",
+    "skills",
+)
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH)
@@ -82,6 +101,49 @@ def init_db() -> None:
             )
             """
         )
+        # A "channel" = one site + one query, refreshed on a schedule.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channels (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                name           TEXT,
+                site           TEXT NOT NULL,
+                search_term    TEXT NOT NULL,
+                location       TEXT DEFAULT '',
+                distance_km    INTEGER DEFAULT 25,
+                results_wanted INTEGER DEFAULT 25,
+                hours_old      INTEGER,
+                is_remote      INTEGER DEFAULT 0,
+                created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        # Association channel <-> job, with per-channel first/last seen so we can
+        # mark "new" jobs (first_seen == last_seen).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS channel_jobs (
+                channel_id INTEGER NOT NULL,
+                job_url    TEXT NOT NULL,
+                first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+                last_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (channel_id, job_url)
+            )
+            """
+        )
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotently add the rich columns to the existing `jobs` table.
+
+    Uses ``PRAGMA table_info`` + ``ALTER TABLE ADD COLUMN`` so an existing DB
+    volume (with jobs already stored) keeps its data — we only add what's missing.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for col in _RICH_JOB_COLUMNS:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
 
 
 def set_feedback(
@@ -141,7 +203,26 @@ _JOB_FIELDS = (
     "job_type",
     "date_posted",
     "description",
-)
+) + _RICH_JOB_COLUMNS
+
+
+def _upsert_jobs_conn(conn: sqlite3.Connection, records: list[dict[str, Any]]) -> None:
+    """Insert/update raw job rows on an open connection (no locking)."""
+    cols = ", ".join(_JOB_FIELDS)
+    placeholders = ", ".join("?" for _ in _JOB_FIELDS)
+    updates = ", ".join(f"{f} = excluded.{f}" for f in _JOB_FIELDS)
+    sql = (
+        f"INSERT INTO jobs (job_url, {cols}, seen_at) "
+        f"VALUES (?, {placeholders}, datetime('now')) "
+        f"ON CONFLICT(job_url) DO UPDATE SET {updates}"
+    )
+    for rec in records:
+        url = rec.get("job_url")
+        if not url:
+            continue
+        # Stringify non-text values (is_remote may be bool) for stable storage.
+        values = [None if rec.get(f) is None else str(rec.get(f)) for f in _JOB_FIELDS]
+        conn.execute(sql, (url, *values))
 
 
 def upsert_jobs(records: list[dict[str, Any]]) -> None:
@@ -149,30 +230,7 @@ def upsert_jobs(records: list[dict[str, Any]]) -> None:
     if not records:
         return
     with _lock, _connect() as conn:
-        for rec in records:
-            url = rec.get("job_url")
-            if not url:
-                continue
-            values = [rec.get(f) for f in _JOB_FIELDS]
-            # Stringify non-text values (is_remote may be bool) for stable storage.
-            values = [None if v is None else str(v) for v in values]
-            conn.execute(
-                """
-                INSERT INTO jobs (job_url, site, title, company, location,
-                                  is_remote, job_type, date_posted, description, seen_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(job_url) DO UPDATE SET
-                    site        = excluded.site,
-                    title       = excluded.title,
-                    company     = excluded.company,
-                    location    = excluded.location,
-                    is_remote   = excluded.is_remote,
-                    job_type    = excluded.job_type,
-                    date_posted = excluded.date_posted,
-                    description = excluded.description
-                """,
-                (url, *values),
-            )
+        _upsert_jobs_conn(conn, records)
 
 
 def get_all_jobs() -> list[dict[str, Any]]:
@@ -186,16 +244,198 @@ def get_all_jobs() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT job_url, site, title, company, location,
-                   is_remote, job_type, date_posted
+                   is_remote, job_type, date_posted,
+                   company_logo, salary_min, salary_max,
+                   salary_currency, salary_interval
             FROM jobs
             ORDER BY seen_at DESC
             """
         ).fetchall()
+    return [_row_to_card(row) for row in rows]
+
+
+def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
+    """Normalise a jobs row into a lightweight card record (no description)."""
+    rec = dict(row)
+    rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+    return rec
+
+
+def get_job(job_url: str) -> dict[str, Any] | None:
+    """Return a single job with **all** stored columns (for the detail page)."""
+    if not job_url:
+        return None
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE job_url = ?", (job_url,)
+        ).fetchone()
+    if row is None:
+        return None
+    rec = dict(row)
+    rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+    return rec
+
+
+# --------------------------------------------------------------------------- #
+# Channels                                                                     #
+# --------------------------------------------------------------------------- #
+
+_CHANNEL_FIELDS = (
+    "name",
+    "site",
+    "search_term",
+    "location",
+    "distance_km",
+    "results_wanted",
+    "hours_old",
+    "is_remote",
+)
+
+
+def create_channel(
+    *,
+    site: str,
+    search_term: str,
+    name: str = "",
+    location: str = "",
+    distance_km: int = 25,
+    results_wanted: int = 25,
+    hours_old: int | None = None,
+    is_remote: bool = False,
+) -> int:
+    """Create a channel and return its new id."""
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO channels
+                (name, site, search_term, location, distance_km,
+                 results_wanted, hours_old, is_remote)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name or f"{site}: {search_term}",
+                site,
+                search_term,
+                location,
+                distance_km,
+                results_wanted,
+                hours_old,
+                1 if is_remote else 0,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def _channel_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    rec = dict(row)
+    rec["is_remote"] = bool(rec.get("is_remote"))
+    return rec
+
+
+def get_channel(channel_id: int) -> dict[str, Any] | None:
+    """Return a single channel by id, or None."""
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+    return _channel_from_row(row) if row else None
+
+
+def list_channels() -> list[dict[str, Any]]:
+    """Return all channels with ``total_count`` and ``new_count`` per channel."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM channels ORDER BY created_at ASC"
+        ).fetchall()
+        channels: list[dict[str, Any]] = []
+        for row in rows:
+            ch = _channel_from_row(row)
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN first_seen = last_seen THEN 1 ELSE 0 END) AS new
+                FROM channel_jobs WHERE channel_id = ?
+                """,
+                (ch["id"],),
+            ).fetchone()
+            ch["total_count"] = counts["total"] or 0
+            ch["new_count"] = counts["new"] or 0
+            channels.append(ch)
+    return channels
+
+
+def delete_channel(channel_id: int) -> None:
+    """Delete a channel and its associations (jobs themselves are kept)."""
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM channel_jobs WHERE channel_id = ?", (channel_id,))
+        conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+
+
+def upsert_channel_jobs(
+    channel_id: int, records: list[dict[str, Any]]
+) -> int:
+    """Upsert jobs into `jobs` and link them to the channel.
+
+    Returns the number of jobs that are **new** for this channel (i.e. seen for
+    the first time). Existing links have their ``last_seen`` bumped so they are
+    no longer flagged as new.
+    """
+    if not records:
+        return 0
+    new_count = 0
+    with _lock, _connect() as conn:
+        _upsert_jobs_conn(conn, records)
+        for rec in records:
+            url = rec.get("job_url")
+            if not url:
+                continue
+            existing = conn.execute(
+                "SELECT 1 FROM channel_jobs WHERE channel_id = ? AND job_url = ?",
+                (channel_id, url),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE channel_jobs SET last_seen = datetime('now')
+                    WHERE channel_id = ? AND job_url = ?
+                    """,
+                    (channel_id, url),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO channel_jobs (channel_id, job_url, first_seen, last_seen)
+                    VALUES (?, ?, datetime('now'), datetime('now'))
+                    """,
+                    (channel_id, url),
+                )
+                new_count += 1
+    return new_count
+
+
+def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
+    """Return the card records for a channel's jobs, newest-first, with a
+    per-channel ``is_new`` flag."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT j.job_url, j.site, j.title, j.company, j.location,
+                   j.is_remote, j.job_type, j.date_posted,
+                   j.company_logo, j.salary_min, j.salary_max,
+                   j.salary_currency, j.salary_interval,
+                   cj.first_seen, cj.last_seen
+            FROM channel_jobs cj
+            JOIN jobs j ON j.job_url = cj.job_url
+            WHERE cj.channel_id = ?
+            ORDER BY cj.last_seen DESC, cj.first_seen DESC
+            """,
+            (channel_id,),
+        ).fetchall()
     jobs: list[dict[str, Any]] = []
     for row in rows:
-        rec = dict(row)
-        # is_remote is stored as text ("True"/"False"); normalise to bool.
-        rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+        rec = _row_to_card(row)
+        rec["is_new"] = rec.pop("first_seen") == rec.pop("last_seen")
         jobs.append(rec)
     return jobs
 

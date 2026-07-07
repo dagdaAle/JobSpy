@@ -19,6 +19,9 @@ from __future__ import annotations
 import io
 import math
 import os
+import threading
+import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
@@ -28,7 +31,13 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from jobspy.presets import search_italy, search_remote
+from jobspy.presets import (
+    ITALY_LOCAL_SITES,
+    REMOTE_ONLY_SITES,
+    search_italy,
+    search_remote,
+    search_site,
+)
 
 import analyzer
 import storage
@@ -50,11 +59,39 @@ _DISPLAY_COLUMNS = [
 # Columns needed for analysis (adds description on top of display columns).
 _ANALYSIS_COLUMNS = _DISPLAY_COLUMNS + ["description"]
 
+# Rich columns pulled straight from the JobSpy DataFrame (same name in DB).
+_RICH_PASSTHROUGH = [
+    "job_url_direct",
+    "company_url",
+    "company_industry",
+    "company_logo",
+    "banner_photo_url",
+    "job_level",
+    "job_function",
+    "emails",
+    "skills",
+]
+# DataFrame compensation columns -> DB salary columns.
+_SALARY_MAP = {
+    "min_amount": "salary_min",
+    "max_amount": "salary_max",
+    "currency": "salary_currency",
+    "interval": "salary_interval",
+}
+# Full column set stored for a channel job (rich detail page + analysis).
+_FULL_COLUMNS = _ANALYSIS_COLUMNS + _RICH_PASSTHROUGH + list(_SALARY_MAP.keys())
+
 # Cap analyses per search to bound API cost/latency (overridable via env).
 _MAX_ANALYSIS = int(os.environ.get("MAX_ANALYSIS_PER_SEARCH", "30"))
 
+# Refresh every channel this often (seconds). 24h like SubitoWatch.
+_REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_SECONDS", str(24 * 60 * 60)))
+
 # The most recent search result, reused by /export. Single-user local app.
 _last_result: pd.DataFrame = pd.DataFrame()
+
+# Serialize scraping so the scheduler and manual actions don't overlap.
+_scrape_lock = threading.Lock()
 
 
 class SearchRequest(BaseModel):
@@ -76,6 +113,21 @@ class FeedbackRequest(BaseModel):
     site: str = ""
 
 
+# All sites that can back a channel.
+_ALL_SITES = ITALY_LOCAL_SITES + REMOTE_ONLY_SITES
+
+
+class ChannelRequest(BaseModel):
+    site: str = Field(..., min_length=1)
+    search_term: str = Field(..., min_length=1)
+    name: str = ""
+    location: str = ""
+    distance_km: int = Field(25, ge=1, le=500)
+    results_wanted: int = Field(25, ge=1, le=500)
+    hours_old: int | None = Field(None, ge=1)
+    is_remote: bool = False
+
+
 @app.on_event("startup")
 def _startup() -> None:
     storage.init_db()
@@ -88,6 +140,11 @@ def _startup() -> None:
     except Exception:
         # CV is optional; never block startup on parsing issues.
         pass
+
+    # Start the background scheduler that refreshes channels every 24h.
+    thread = threading.Thread(target=_scheduler_loop, daemon=True)
+    thread.start()
+    print("[scheduler] started (interval=%ss)" % _REFRESH_INTERVAL, flush=True)
 
 
 def _clean_records(
@@ -113,6 +170,10 @@ def _clean_records(
                 clean[key] = None
             else:
                 clean[key] = value
+        # Rename compensation columns to the DB salary_* names.
+        for src, dst in _SALARY_MAP.items():
+            if src in clean:
+                clean[dst] = clean.pop(src)
         records.append(clean)
     return records
 
@@ -152,6 +213,60 @@ def _analyze_new_jobs(records: list[dict[str, Any]]) -> None:
                 storage.set_analysis(url, result)
 
 
+def _refresh_channel(channel: dict[str, Any]) -> int:
+    """Scrape a channel's site+query, persist jobs, analyze the new ones.
+
+    Returns the number of jobs new to this channel. Scraping is serialized via
+    ``_scrape_lock`` so the scheduler and manual triggers don't overlap.
+    """
+    with _scrape_lock:
+        df = search_site(
+            channel["site"],
+            channel["search_term"],
+            location=channel.get("location") or "",
+            distance_km=channel.get("distance_km") or 25,
+            results_wanted=channel.get("results_wanted") or 25,
+            hours_old=channel.get("hours_old"),
+            is_remote=bool(channel.get("is_remote")),
+        )
+
+    records = _clean_records(df, _FULL_COLUMNS)
+    new_count = storage.upsert_channel_jobs(channel["id"], records)
+
+    # Only analyze jobs that are new for this channel (bounds cost).
+    new_urls = {
+        r["job_url"]
+        for r in records
+        if r.get("job_url")
+    }
+    # _analyze_new_jobs already skips already-analyzed urls, so pass all records
+    # belonging to this channel; the analyzer cache prevents re-paying.
+    _analyze_new_jobs(records)
+    return new_count
+
+
+def _scheduler_loop() -> None:
+    """Refresh every channel, then sleep for the interval, forever."""
+    time.sleep(30)  # let the app finish booting before the first pass
+    while True:
+        try:
+            channels = storage.list_channels()
+            for channel in channels:
+                try:
+                    new_count = _refresh_channel(channel)
+                    print(
+                        "[scheduler] channel %s (%s): %d new"
+                        % (channel["id"], channel["site"], new_count),
+                        flush=True,
+                    )
+                except Exception:
+                    print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
+                    traceback.print_exc()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(_REFRESH_INTERVAL)
+
+
 @app.post("/search")
 def run_search(req: SearchRequest) -> dict[str, Any]:
     global _last_result
@@ -185,8 +300,8 @@ def run_search(req: SearchRequest) -> dict[str, Any]:
 
     _last_result = df if df is not None else pd.DataFrame()
 
-    # Persist raw jobs (with description) and auto-analyze the new ones.
-    analysis_records = _clean_records(_last_result, _ANALYSIS_COLUMNS)
+    # Persist raw jobs (with description + rich columns) and analyze new ones.
+    analysis_records = _clean_records(_last_result, _FULL_COLUMNS)
     storage.upsert_jobs(analysis_records)
     _analyze_new_jobs(analysis_records)
 
@@ -275,6 +390,88 @@ def list_jobs() -> dict[str, Any]:
         "analysis": storage.get_all_analysis(),
         "analyzer_configured": analyzer.is_configured(),
     }
+
+
+@app.get("/channels")
+def get_channels() -> dict[str, Any]:
+    """List all channels with their per-channel job counts."""
+    return {"channels": storage.list_channels(), "sites": _ALL_SITES}
+
+
+@app.post("/channels")
+def create_channel(req: ChannelRequest) -> dict[str, Any]:
+    """Create a channel and do an immediate first refresh."""
+    site = req.site.strip().lower()
+    if site not in _ALL_SITES:
+        raise HTTPException(status_code=422, detail=f"Sito non supportato: {site}")
+
+    channel_id = storage.create_channel(
+        site=site,
+        search_term=req.search_term,
+        name=req.name,
+        location=req.location,
+        distance_km=req.distance_km,
+        results_wanted=req.results_wanted,
+        hours_old=req.hours_old,
+        is_remote=req.is_remote,
+    )
+    channel = storage.get_channel(channel_id)
+    try:
+        new_count = _refresh_channel(channel) if channel else 0
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Canale creato ma scraping fallito: {exc}"
+        ) from exc
+
+    return {
+        "channel": storage.get_channel(channel_id),
+        "new_count": new_count,
+    }
+
+
+@app.delete("/channels/{channel_id}")
+def remove_channel(channel_id: int) -> dict[str, Any]:
+    if storage.get_channel(channel_id) is None:
+        raise HTTPException(status_code=404, detail="Canale non trovato.")
+    storage.delete_channel(channel_id)
+    return {"ok": True, "id": channel_id}
+
+
+@app.post("/channels/{channel_id}/refresh")
+def refresh_channel(channel_id: int) -> dict[str, Any]:
+    channel = storage.get_channel(channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Canale non trovato.")
+    try:
+        new_count = _refresh_channel(channel)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Errore durante lo scraping: {exc}") from exc
+    return {"ok": True, "id": channel_id, "new_count": new_count}
+
+
+@app.get("/channels/{channel_id}/jobs")
+def channel_jobs(channel_id: int) -> dict[str, Any]:
+    if storage.get_channel(channel_id) is None:
+        raise HTTPException(status_code=404, detail="Canale non trovato.")
+    jobs = storage.get_channel_jobs(channel_id)
+    return {
+        "count": len(jobs),
+        "jobs": jobs,
+        "feedback": storage.get_all_feedback(),
+        "analysis": storage.get_all_analysis(),
+        "analyzer_configured": analyzer.is_configured(),
+    }
+
+
+@app.get("/job")
+def get_job(url: str) -> dict[str, Any]:
+    """Return a single job with ALL stored fields + analysis + feedback (detail page)."""
+    job = storage.get_job(url)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Lavoro non trovato.")
+    analysis = storage.get_all_analysis().get(url)
+    feedback = storage.get_all_feedback().get(url)
+    return {"job": job, "analysis": analysis, "feedback": feedback}
 
 
 @app.get("/status")
