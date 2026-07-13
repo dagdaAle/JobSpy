@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "jobspy-web-docker",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build"],
+      "port": 8080
+    },
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "webapp/frontend",
+      "port": 5173
+    },
+    {
+      "name": "webapp-local",
+      "runtimeExecutable": "uvicorn",
+      "runtimeArgs": ["app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "cwd": "webapp",
+      "port": 8000
+    }
+  ]
+}

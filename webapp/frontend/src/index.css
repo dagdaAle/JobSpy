@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #0a0a0a;
+    color: #e5e2e1;
+    font-family: "Space Grotesk", sans-serif;
+  }
+
+  .material-symbols-outlined {
+    font-family: "Material Symbols Outlined";
+    font-weight: normal;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  }
+  .fill-icon {
+    font-variation-settings: "FILL" 1;
+  }
+
+  /* Custom neobrutalist scrollbar */
+  ::-webkit-scrollbar {
+    width: 12px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0a0a0a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #353534;
+    border: 3px solid #0a0a0a;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #839493;
+  }
+}
+
+@layer components {
+  .neo-card {
+    @apply border-thin border-black transition-all duration-200;
+    box-shadow: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+  }
+  .neo-card:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  }
+
+  .neo-button {
+    @apply border-thin border-black transition-all duration-100;
+    box-shadow: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+  }
+  .neo-button:active {
+    transform: translate(2px, 2px);
+    box-shadow: 0px 0px 0px 0px rgba(0, 0, 0, 1);
+  }
+
+  .neo-input {
+    @apply border-thin border-black bg-surface-dim;
+  }
+  .neo-input:focus {
+    outline: none;
+    border-color: #00ffff;
+    box-shadow: 4px 4px 0px 0px #00ffff;
+  }
+
+  /* Shorthand for the recurring hard 4px black offset shadow. */
+  .neo-shadow {
+    box-shadow: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+  }
+  .neo-shadow-lg {
+    box-shadow: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
+}

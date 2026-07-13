@@ -513,5 +513,11 @@ def status() -> dict[str, Any]:
     }
 
 
+@app.get("/analytics")
+def analytics() -> dict[str, Any]:
+    """Aggregated KPIs + market-intelligence breakdowns over the stored data."""
+    return storage.analytics_summary()
+
+
 # Serve the SPA. Mounted last so API routes take precedence.
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

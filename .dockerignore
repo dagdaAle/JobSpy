@@ -9,3 +9,6 @@ webapp/feedback.db
 *.db
 poetry.lock
 .pre-commit-config.yaml
+# Frontend sources/deps: the built SPA already lives in webapp/static.
+webapp/frontend/node_modules
+webapp/frontend/dist

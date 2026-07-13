@@ -8,6 +8,8 @@
 *.pyc
 .env
 dist
+node_modules/
+.claude/settings.local.json
 
 # Local CV (personal data) — never commit
 webapp/cv/*.pdf

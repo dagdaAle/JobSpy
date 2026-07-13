@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 from typing import Any, Literal
@@ -528,3 +529,176 @@ def get_cv_text() -> str:
     with _lock, _connect() as conn:
         row = conn.execute("SELECT text FROM cv WHERE id = 1").fetchone()
     return row["text"] if row else ""
+
+
+# ---------------------------------------------------------------------------
+# Analytics aggregation
+# ---------------------------------------------------------------------------
+
+def _is_remote_true(value: Any) -> bool:
+    """`jobs.is_remote` is stored as TEXT ('True'/'False'/'1'/None)."""
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        f = float(value)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_list(raw: Any) -> list[str]:
+    """Parse a skills/tags cell that may be JSON or a comma/semicolon string."""
+    if not raw:
+        return []
+    text = str(raw).strip()
+    try:
+        arr = json.loads(text)
+        if isinstance(arr, list):
+            return [str(x).strip() for x in arr if str(x).strip()]
+    except (ValueError, TypeError):
+        pass
+    return [p.strip() for p in re.split(r"[,;]", text) if p.strip()]
+
+
+# Tokens that show up in AI tags but are NOT skills (seniority, work mode, …).
+_SKILL_STOPWORDS = {
+    "senior", "junior", "mid", "middle", "lead", "principal", "staff",
+    "remote", "on-site", "onsite", "on site", "no remote", "full remote",
+    "hybrid", "ibrido", "smart working", "stage", "internship", "tirocinio",
+    "full-time", "part-time", "full time", "part time", "freelance",
+    "permanent", "contract", "neolaureato", "entry level", "entry-level",
+}
+
+
+def _top_counts(counter: dict[str, int], limit: int) -> list[dict[str, Any]]:
+    items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [{"name": name, "count": n} for name, n in items[:limit]]
+
+
+def analytics_summary() -> dict[str, Any]:
+    """Aggregate the stored data into KPIs + market-intelligence breakdowns.
+
+    Computed in Python over a single read of the (small) jobs table so the
+    logic stays simple and robust to the TEXT-typed rich columns.
+    """
+    with _lock, _connect() as conn:
+        jobs = [dict(r) for r in conn.execute("SELECT * FROM jobs").fetchall()]
+        scores = [
+            r["relevance_score"]
+            for r in conn.execute(
+                "SELECT relevance_score FROM analysis WHERE relevance_score IS NOT NULL"
+            ).fetchall()
+        ]
+        tag_rows = [r["tags"] for r in conn.execute("SELECT tags FROM analysis").fetchall()]
+        likes = conn.execute(
+            "SELECT COUNT(*) AS n FROM feedback WHERE verdict = 'like'"
+        ).fetchone()["n"]
+        dislikes = conn.execute(
+            "SELECT COUNT(*) AS n FROM feedback WHERE verdict = 'dislike'"
+        ).fetchone()["n"]
+        channel_count = conn.execute("SELECT COUNT(*) AS n FROM channels").fetchone()["n"]
+        new_7d = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE seen_at >= datetime('now', '-7 days')"
+        ).fetchone()["n"]
+
+    total = len(jobs)
+    remote = sum(1 for j in jobs if _is_remote_true(j.get("is_remote")))
+
+    # Salary: midpoints of whatever min/max we have, plus coarse buckets (k/yr).
+    mids: list[float] = []
+    currency_counter: dict[str, int] = {}
+    for j in jobs:
+        lo, hi = _to_float(j.get("salary_min")), _to_float(j.get("salary_max"))
+        vals = [v for v in (lo, hi) if v is not None]
+        mid = sum(vals) / len(vals) if vals else 0
+        # Drop non-annual outliers (hourly/monthly figures scraped as salary).
+        if mid < 1000:
+            continue
+        mids.append(mid)
+        cur = (j.get("salary_currency") or "").strip() or "?"
+        currency_counter[cur] = currency_counter.get(cur, 0) + 1
+
+    salary: dict[str, Any] = {"count": len(mids)}
+    if mids:
+        mids_sorted = sorted(mids)
+        n = len(mids_sorted)
+        salary["min"] = round(mids_sorted[0])
+        salary["max"] = round(mids_sorted[-1])
+        salary["median"] = round(mids_sorted[n // 2])
+        salary["currency"] = max(currency_counter, key=lambda k: currency_counter[k])
+        edges = [(0, 30_000), (30_000, 50_000), (50_000, 80_000),
+                 (80_000, 120_000), (120_000, 10**12)]
+        labels = ["<30k", "30–50k", "50–80k", "80–120k", "120k+"]
+        buckets = []
+        for (lo, hi), label in zip(edges, labels):
+            buckets.append(
+                {"range": label, "count": sum(1 for m in mids_sorted if lo <= m < hi)}
+            )
+        salary["buckets"] = buckets
+
+    # Location words (cities/countries) are noise in the skills chart — collect
+    # them so we can exclude e.g. "Verona" from "top skills".
+    location_words: set[str] = set()
+    for j in jobs:
+        for part in re.split(r"[,/|]", (j.get("location") or "")):
+            token = part.strip().lower()
+            if token:
+                location_words.add(token)
+
+    def _is_skill(token: str) -> bool:
+        low = token.strip().lower()
+        return bool(low) and low not in _SKILL_STOPWORDS and low not in location_words
+
+    # Skills from jobs.skills + AI tags; companies, industries, remote-by-site.
+    skill_counter: dict[str, int] = {}
+    company_counter: dict[str, int] = {}
+    industry_counter: dict[str, int] = {}
+    site_counter: dict[str, dict[str, int]] = {}
+    for j in jobs:
+        for s in _parse_list(j.get("skills")):
+            if not _is_skill(s):
+                continue
+            key = s.title()
+            skill_counter[key] = skill_counter.get(key, 0) + 1
+        company = (j.get("company") or "").strip()
+        if company:
+            company_counter[company] = company_counter.get(company, 0) + 1
+        industry = (j.get("company_industry") or "").strip()
+        if industry:
+            industry_counter[industry] = industry_counter.get(industry, 0) + 1
+        site = (j.get("site") or "?").strip()
+        bucket = site_counter.setdefault(site, {"remote": 0, "onsite": 0})
+        bucket["remote" if _is_remote_true(j.get("is_remote")) else "onsite"] += 1
+    for raw in tag_rows:
+        for t in _parse_list(raw):
+            if not _is_skill(t):
+                continue
+            key = t.title()
+            skill_counter[key] = skill_counter.get(key, 0) + 1
+
+    remote_by_site = [
+        {"site": site, "remote": c["remote"], "onsite": c["onsite"]}
+        for site, c in sorted(
+            site_counter.items(), key=lambda kv: -(kv[1]["remote"] + kv[1]["onsite"])
+        )
+    ]
+
+    return {
+        "kpis": {
+            "total": total,
+            "new_7d": new_7d,
+            "remote_pct": round(remote / total * 100) if total else 0,
+            "avg_score": round(sum(scores) / len(scores)) if scores else None,
+            "analyzed": len(scores),
+            "favorites": likes,
+            "dismissed": dislikes,
+            "channels": channel_count,
+        },
+        "salary": salary,
+        "top_skills": _top_counts(skill_counter, 15),
+        "top_companies": _top_counts(company_counter, 10),
+        "top_industries": _top_counts(industry_counter, 8),
+        "remote_by_site": remote_by_site,
+    }
