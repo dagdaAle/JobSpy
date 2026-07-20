@@ -3,7 +3,7 @@ import { Icon } from "./Icon";
 const SOURCES =
   "INDEED • GLASSDOOR • LINKEDIN • REMOTIVE • REMOTEOK • WEWORKREMOTELY • WORKING NOMADS";
 
-type View = "all" | "saved" | "analytics";
+type View = "all" | "new" | "saved" | "analytics";
 
 interface Props {
   view: View;
@@ -30,6 +30,12 @@ export function TopNav({ view, onNav }: Props) {
           className={`${linkBase} ${view === "all" ? linkActive : linkIdle}`}
         >
           All Jobs
+        </button>
+        <button
+          onClick={() => onNav("new")}
+          className={`${linkBase} ${view === "new" ? linkActive : linkIdle}`}
+        >
+          Nuovi
         </button>
         <button
           onClick={() => onNav("saved")}

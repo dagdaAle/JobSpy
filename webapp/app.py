@@ -85,6 +85,10 @@ _FULL_COLUMNS = _ANALYSIS_COLUMNS + _RICH_PASSTHROUGH + list(_SALARY_MAP.keys())
 # Cap analyses per search to bound API cost/latency (overridable via env).
 _MAX_ANALYSIS = int(os.environ.get("MAX_ANALYSIS_PER_SEARCH", "30"))
 
+# Only keep jobs posted within this many days; older ones are purged daily
+# (liked jobs are always kept). Also the recency window sent to the scraper.
+_RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
+
 # Hour of the day (local time, 0-23) at which channels refresh. Default 09:00.
 _REFRESH_HOUR = int(os.environ.get("REFRESH_HOUR", "9"))
 _REFRESH_MINUTE = int(os.environ.get("REFRESH_MINUTE", "0"))
@@ -276,6 +280,14 @@ def _refresh_all_channels() -> None:
         except Exception:
             print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
             traceback.print_exc()
+    # Keep the feeds readable: drop jobs older than the retention window.
+    # Liked jobs are always preserved by purge_old_jobs.
+    try:
+        removed = storage.purge_old_jobs(_RETENTION_DAYS)
+        print("[scheduler] purged %d jobs older than %d days"
+              % (removed, _RETENTION_DAYS), flush=True)
+    except Exception:
+        traceback.print_exc()
 
 
 def _scheduler_loop() -> None:
@@ -517,6 +529,20 @@ def status() -> dict[str, Any]:
 def analytics() -> dict[str, Any]:
     """Aggregated KPIs + market-intelligence breakdowns over the stored data."""
     return storage.analytics_summary()
+
+
+@app.post("/maintenance/recency")
+def set_recency(hours: int = _RETENTION_DAYS * 24) -> dict[str, Any]:
+    """Set the recency window (hours_old) on every channel."""
+    changed = storage.set_hours_old_all(hours)
+    return {"ok": True, "channels_updated": changed, "hours_old": hours}
+
+
+@app.post("/maintenance/purge")
+def purge(days: int = _RETENTION_DAYS) -> dict[str, Any]:
+    """Purge jobs older than N days (liked jobs are always kept)."""
+    removed = storage.purge_old_jobs(days)
+    return {"ok": True, "removed": removed, "days": days}
 
 
 # Serve the SPA. Mounted last so API routes take precedence.

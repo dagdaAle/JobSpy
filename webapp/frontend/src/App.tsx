@@ -18,6 +18,7 @@ import type { Job } from "./api/types";
 
 export default function App() {
   const [page, setPage] = useState<"jobs" | "analytics">("jobs");
+  const [newOnly, setNewOnly] = useState(false);
   const [activeChannelId, setActiveChannelId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Job | null>(null);
   const [filters, setFilters] = useState<Filters>({
@@ -40,6 +41,7 @@ export default function App() {
     const all = jobs.data?.jobs ?? [];
     const q = filters.search.trim().toLowerCase();
     return all.filter((job) => {
+      if (newOnly && !job.is_new) return false;
       if (filters.remoteOnly && !job.is_remote) return false;
       const score = analysisMap[job.job_url]?.relevance_score ?? 0;
       if (score < filters.minScore) return false;
@@ -53,7 +55,7 @@ export default function App() {
       }
       return true;
     });
-  }, [jobs.data, filters, analysisMap, feedbackMap]);
+  }, [jobs.data, filters, analysisMap, feedbackMap, newOnly]);
 
   const totalCount = jobs.data?.jobs?.length ?? 0;
 
@@ -85,19 +87,22 @@ export default function App() {
         view={
           page === "analytics"
             ? "analytics"
-            : filters.saved === "liked"
-              ? "saved"
-              : "all"
+            : newOnly
+              ? "new"
+              : filters.saved === "liked"
+                ? "saved"
+                : "all"
         }
         onNav={(v) => {
           if (v === "analytics") {
             setPage("analytics");
-          } else {
-            setPage("jobs");
-            // Saved must show ALL favourites, not just the active channel's.
-            if (v === "saved") setActiveChannelId(null);
-            setFilters((f) => ({ ...f, saved: v === "saved" ? "liked" : "all" }));
+            return;
           }
+          setPage("jobs");
+          setNewOnly(v === "new");
+          // "Nuovi" and "Saved" span every channel, not just the active one.
+          if (v === "new" || v === "saved") setActiveChannelId(null);
+          setFilters((f) => ({ ...f, saved: v === "saved" ? "liked" : "all" }));
         }}
       />
       <main className="flex-1 max-w-[1280px] w-full mx-auto px-margin-page py-gutter space-y-gutter">
@@ -112,7 +117,10 @@ export default function App() {
           sites={channels.data?.sites ?? []}
           totalCount={totalCount}
           activeChannelId={activeChannelId}
-          onSelect={setActiveChannelId}
+          onSelect={(id) => {
+            setActiveChannelId(id);
+            setNewOnly(false);
+          }}
         />
 
         <FiltersToolbar

@@ -33,15 +33,22 @@ export function JobCard({ job, analysis, feedback, onOpen, onLike, onDismiss }: 
           <div className="w-12 h-12 bg-primary-fixed-dim border-thin border-black flex items-center justify-center text-headline-md text-black font-black shrink-0">
             {initial(job.company)}
           </div>
-          <div className="flex flex-col items-end">
-            <span
-              className={`px-2 py-0.5 text-[10px] font-black uppercase border-thin border-black ${siteBadge(
-                job.site,
-              )}`}
-            >
-              {job.site}
-            </span>
-            <span className="text-outline text-meta-xs mt-1">{timeAgo(job.date_posted)}</span>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1">
+              {job.is_new && (
+                <span className="px-2 py-0.5 text-[10px] font-black uppercase border-thin border-black bg-secondary-fixed text-on-secondary-fixed">
+                  NEW
+                </span>
+              )}
+              <span
+                className={`px-2 py-0.5 text-[10px] font-black uppercase border-thin border-black ${siteBadge(
+                  job.site,
+                )}`}
+              >
+                {job.site}
+              </span>
+            </div>
+            <span className="text-outline text-meta-xs">{timeAgo(job.date_posted)}</span>
           </div>
         </div>
 

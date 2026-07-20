@@ -13,6 +13,7 @@ export interface Job {
   job_type: string | null;
   date_posted: string | null;
   job_url: string;
+  is_new?: boolean;
   // Rich fields (present on stored/channel jobs).
   job_url_direct?: string | null;
   company_url?: string | null;

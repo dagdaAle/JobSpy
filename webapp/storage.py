@@ -244,12 +244,17 @@ def get_all_jobs() -> list[dict[str, Any]]:
     with _lock, _connect() as conn:
         rows = conn.execute(
             """
-            SELECT job_url, site, title, company, location,
-                   is_remote, job_type, date_posted,
-                   company_logo, salary_min, salary_max,
-                   salary_currency, salary_interval
-            FROM jobs
-            ORDER BY seen_at DESC
+            SELECT j.job_url, j.site, j.title, j.company, j.location,
+                   j.is_remote, j.job_type, j.date_posted,
+                   j.company_logo, j.salary_min, j.salary_max,
+                   j.salary_currency, j.salary_interval,
+                   EXISTS(
+                       SELECT 1 FROM channel_jobs cj
+                       WHERE cj.job_url = j.job_url
+                         AND cj.first_seen = cj.last_seen
+                   ) AS is_new
+            FROM jobs j
+            ORDER BY j.date_posted DESC, j.seen_at DESC
             """
         ).fetchall()
     return [_row_to_card(row) for row in rows]
@@ -259,6 +264,8 @@ def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
     """Normalise a jobs row into a lightweight card record (no description)."""
     rec = dict(row)
     rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+    if "is_new" in rec:
+        rec["is_new"] = bool(rec["is_new"])
     return rec
 
 
@@ -371,6 +378,44 @@ def delete_channel(channel_id: int) -> None:
     with _lock, _connect() as conn:
         conn.execute("DELETE FROM channel_jobs WHERE channel_id = ?", (channel_id,))
         conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+
+
+def set_hours_old_all(hours: int) -> int:
+    """Set the recency window (hours_old) on every channel. Returns rows changed."""
+    with _lock, _connect() as conn:
+        cur = conn.execute("UPDATE channels SET hours_old = ?", (hours,))
+        return cur.rowcount
+
+
+def purge_old_jobs(days: int = 14) -> int:
+    """
+    Delete jobs whose ``date_posted`` is older than ``days`` days, together with
+    their channel links. Liked jobs are ALWAYS kept (favorites are never touched).
+
+    Returns how many jobs were removed. Jobs without a parseable date_posted are
+    kept (we can't tell their age).
+    """
+    with _lock, _connect() as conn:
+        # Jobs to purge: old by date, and NOT liked.
+        urls = [
+            r["job_url"]
+            for r in conn.execute(
+                """
+                SELECT job_url FROM jobs
+                WHERE date_posted IS NOT NULL
+                  AND date_posted != ''
+                  AND date(date_posted) < date('now', ?)
+                  AND job_url NOT IN (
+                      SELECT job_url FROM feedback WHERE verdict = 'like'
+                  )
+                """,
+                (f"-{int(days)} days",),
+            ).fetchall()
+        ]
+        for url in urls:
+            conn.execute("DELETE FROM channel_jobs WHERE job_url = ?", (url,))
+            conn.execute("DELETE FROM jobs WHERE job_url = ?", (url,))
+    return len(urls)
 
 
 def upsert_channel_jobs(
