@@ -164,24 +164,58 @@ def set_feedback(
         raise ValueError("job_url is required")
 
     with _lock, _connect() as conn:
+        siblings = _sibling_rows(conn, job_url)
+        prev = conn.execute(
+            "SELECT verdict FROM feedback WHERE job_url = ?", (job_url,)
+        ).fetchone()
+        prev_verdict = prev["verdict"] if prev else None
+
         if verdict is None:
             conn.execute("DELETE FROM feedback WHERE job_url = ?", (job_url,))
+            # Toggling off clears the same verdict on the other copies.
+            if prev_verdict:
+                for sib in siblings:
+                    conn.execute(
+                        "DELETE FROM feedback WHERE job_url = ? AND verdict = ?",
+                        (sib["job_url"], prev_verdict),
+                    )
             return
         if verdict not in ("like", "dislike"):
             raise ValueError(f"invalid verdict: {verdict!r}")
-        conn.execute(
-            """
-            INSERT INTO feedback (job_url, verdict, title, company, site, updated_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(job_url) DO UPDATE SET
-                verdict = excluded.verdict,
-                title   = excluded.title,
-                company = excluded.company,
-                site    = excluded.site,
-                updated_at = datetime('now')
-            """,
-            (job_url, verdict, title, company, site),
-        )
+        _write_feedback(conn, job_url, verdict, title, company, site)
+        for sib in siblings:
+            # A dislike never overrides a like on another copy -- unless the
+            # user is explicitly turning this very offer from like to dislike.
+            if verdict == "dislike" and prev_verdict != "like":
+                liked = conn.execute(
+                    "SELECT 1 FROM feedback WHERE job_url = ? AND verdict = 'like'",
+                    (sib["job_url"],),
+                ).fetchone()
+                if liked:
+                    continue
+            _write_feedback(
+                conn, sib["job_url"], verdict,
+                sib["title"] or "", sib["company"] or "", sib["site"] or "",
+            )
+
+
+def _write_feedback(
+    conn: sqlite3.Connection, job_url: str, verdict: str,
+    title: str, company: str, site: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO feedback (job_url, verdict, title, company, site, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(job_url) DO UPDATE SET
+            verdict = excluded.verdict,
+            title   = excluded.title,
+            company = excluded.company,
+            site    = excluded.site,
+            updated_at = datetime('now')
+        """,
+        (job_url, verdict, title, company, site),
+    )
 
 
 def get_all_feedback() -> dict[str, str]:
@@ -224,6 +258,7 @@ def _upsert_jobs_conn(conn: sqlite3.Connection, records: list[dict[str, Any]]) -
         # Stringify non-text values (is_remote may be bool) for stable storage.
         values = [None if rec.get(f) is None else str(rec.get(f)) for f in _JOB_FIELDS]
         conn.execute(sql, (url, *values))
+    _inherit_group_feedback(conn, [r.get("job_url") for r in records if r.get("job_url")])
 
 
 def upsert_jobs(records: list[dict[str, Any]]) -> None:
@@ -257,7 +292,7 @@ def get_all_jobs() -> list[dict[str, Any]]:
             ORDER BY j.date_posted DESC, j.seen_at DESC
             """
         ).fetchall()
-    return [_row_to_card(row) for row in rows]
+        return _group_duplicates(conn, [_row_to_card(row) for row in rows])
 
 
 def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
@@ -267,6 +302,123 @@ def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
     if "is_new" in rec:
         rec["is_new"] = bool(rec["is_new"])
     return rec
+
+
+# --------------------------------------------------------------------------- #
+# Duplicates                                                                   #
+# --------------------------------------------------------------------------- #
+# Some employers publish the same offer once per region (e.g. seven identical
+# "PLM Developer" posts that differ only by URL and location). Copies are shown
+# as a single card and share the same like/dislike.
+
+_DASHES = str.maketrans({"\u2013": "-", "\u2014": "-"})
+
+
+def _dup_key(title: Any, company: Any) -> tuple[str, str] | None:
+    """Normalised (title, company) identifying copies of the same offer.
+
+    Returns None when either field is missing: without both we can't tell
+    copies apart, so such jobs are never grouped.
+    """
+    t = " ".join(str(title or "").translate(_DASHES).lower().split())
+    c = " ".join(str(company or "").lower().split())
+    return (t, c) if t and c else None
+
+
+def _sibling_rows(conn: sqlite3.Connection, job_url: str) -> list[sqlite3.Row]:
+    """Other stored copies of the same offer as ``job_url``."""
+    row = conn.execute(
+        "SELECT title, company FROM jobs WHERE job_url = ?", (job_url,)
+    ).fetchone()
+    key = _dup_key(row["title"], row["company"]) if row else None
+    if key is None:
+        return []
+    rows = conn.execute(
+        "SELECT job_url, title, company, site FROM jobs WHERE job_url != ?",
+        (job_url,),
+    ).fetchall()
+    return [r for r in rows if _dup_key(r["title"], r["company"]) == key]
+
+
+def _inherit_group_feedback(conn: sqlite3.Connection, urls: list[str]) -> None:
+    """New copies of an offer inherit the verdict already given to the group,
+    so an offer the user dismissed doesn't come back under a new URL."""
+    if not urls:
+        return
+    rows = conn.execute(
+        """
+        SELECT j.job_url, j.title, j.company, j.site, f.verdict
+        FROM jobs j LEFT JOIN feedback f ON f.job_url = j.job_url
+        """
+    ).fetchall()
+    verdicts: dict[tuple[str, str], set[str]] = {}
+    for r in rows:
+        key = _dup_key(r["title"], r["company"])
+        if key and r["verdict"]:
+            verdicts.setdefault(key, set()).add(r["verdict"])
+    by_url = {r["job_url"]: r for r in rows}
+    for url in urls:
+        r = by_url.get(url)
+        if r is None or r["verdict"]:
+            continue
+        key = _dup_key(r["title"], r["company"])
+        group = verdicts.get(key) if key else None
+        if not group:
+            continue
+        verdict = "like" if "like" in group else "dislike"
+        _write_feedback(conn, url, verdict, r["title"] or "", r["company"] or "", r["site"] or "")
+
+
+def _group_duplicates(
+    conn: sqlite3.Connection, cards: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Collapse copies of the same offer into one card.
+
+    The representative is the liked copy if any, then a disliked one, then one
+    with an AI analysis, then the first (newest). Locations are merged.
+    The group keeps the position of its first member.
+    """
+    feedback = {
+        r["job_url"]: r["verdict"]
+        for r in conn.execute("SELECT job_url, verdict FROM feedback")
+    }
+    analyzed = {r["job_url"] for r in conn.execute("SELECT job_url FROM analysis")}
+    groups: dict[Any, list[tuple[int, dict[str, Any]]]] = {}
+    order: list[Any] = []
+    for i, card in enumerate(cards):
+        key = _dup_key(card.get("title"), card.get("company")) or ("", card["job_url"])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append((i, card))
+
+    rank = {"like": 0, "dislike": 1}
+    out: list[dict[str, Any]] = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            out.append(members[0][1])
+            continue
+        _, best = min(
+            members,
+            key=lambda m: (
+                rank.get(feedback.get(m[1]["job_url"]), 2),
+                m[1]["job_url"] not in analyzed,
+                m[0],
+            ),
+        )
+        card = dict(best)
+        locations: list[str] = []
+        for _, m in members:
+            loc = (m.get("location") or "").strip()
+            if loc and loc not in locations:
+                locations.append(loc)
+        card["location"] = " · ".join(locations)
+        card["is_new"] = any(m.get("is_new") for _, m in members)
+        card["duplicates"] = len(members)
+        card["duplicate_urls"] = [m["job_url"] for _, m in members]
+        out.append(card)
+    return out
 
 
 def get_job(job_url: str) -> dict[str, Any] | None:
@@ -478,12 +630,12 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
             """,
             (channel_id,),
         ).fetchall()
-    jobs: list[dict[str, Any]] = []
-    for row in rows:
-        rec = _row_to_card(row)
-        rec["is_new"] = rec.pop("first_seen") == rec.pop("last_seen")
-        jobs.append(rec)
-    return jobs
+        jobs: list[dict[str, Any]] = []
+        for row in rows:
+            rec = _row_to_card(row)
+            rec["is_new"] = rec.pop("first_seen") == rec.pop("last_seen")
+            jobs.append(rec)
+        return _group_duplicates(conn, jobs)
 
 
 # --------------------------------------------------------------------------- #
