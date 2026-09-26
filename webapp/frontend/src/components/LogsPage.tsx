@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ScrollText } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,13 @@ const TRIGGER: Record<LogEntry["trigger"], string> = {
   scheduler: "Automatico",
   manual: "Manuale",
   create: "Nuovo canale",
+  startup: "Avvio del servizio",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  analysis: "Analisi AI delle offerte",
+  archive: "Uscite dal feed (senza giudizio)",
+  purge: "Pulizia offerte vecchie",
 };
 
 export function LogsPage() {
@@ -70,7 +77,7 @@ export function LogsPage() {
           <div>
             <h2 className="font-medium">Registro aggiornamenti</h2>
             <p className="text-sm text-muted-foreground">
-              Ogni ricerca dei canali e ogni pulizia delle offerte vecchie. Conservato 90 giorni.
+              Ogni ricerca dei canali, ogni giro di analisi AI e ogni uscita dal feed. Non viene mai cancellato.
             </p>
           </div>
           <Tabs value={only} onValueChange={(v) => setOnly(v as "all" | "errors")}>
@@ -107,8 +114,8 @@ export function LogsPage() {
                     {formatDateTime(l.finished_at)}
                   </TableCell>
                   <TableCell>
-                    {l.kind === "purge" ? (
-                      <span>Pulizia offerte vecchie</span>
+                    {l.kind !== "refresh" ? (
+                      <span>{KIND_LABEL[l.kind] ?? l.kind}</span>
                     ) : (
                       <span className="flex items-center gap-2">
                         <span className={cn("size-1.5 shrink-0 rounded-full", siteDot(l.site))} />
@@ -135,12 +142,25 @@ export function LogsPage() {
 }
 
 function Outcome({ log: l }: { log: LogEntry }) {
+  if (l.status === "running") {
+    return (
+      <Badge variant="secondary">
+        <Loader2 className="animate-spin" /> In corso
+        {l.kind === "analysis" && l.found ? ` · ${l.found} da analizzare` : ""}
+      </Badge>
+    );
+  }
   if (l.status === "error") {
     return (
       <div className="space-y-1">
         <Badge variant="destructive">
           <AlertTriangle /> Errore
         </Badge>
+        {l.kind === "analysis" && (
+          <p className="text-xs text-muted-foreground">
+            {l.analyzed} analizzate · {l.analysis_failed} fallite
+          </p>
+        )}
         {l.error && <p className="max-w-md font-mono text-xs break-words text-destructive">{l.error}</p>}
       </div>
     );
@@ -148,7 +168,15 @@ function Outcome({ log: l }: { log: LogEntry }) {
   const parts =
     l.kind === "purge"
       ? [`${l.removed} rimosse`]
-      : [
+      : l.kind === "archive"
+        ? [`${l.removed} archiviate`]
+        : l.kind === "analysis"
+          ? [
+              `${l.analyzed} analizzate`,
+              `${l.found} in coda`,
+              l.analysis_failed ? `${l.analysis_failed} fallite` : null,
+            ].filter(Boolean)
+          : [
           `${l.new_count} nuove`,
           `${l.found} trovate`,
           l.analyzed ? `${l.analyzed} analizzate` : null,

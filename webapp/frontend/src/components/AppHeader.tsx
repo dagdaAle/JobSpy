@@ -1,4 +1,4 @@
-import { Moon, Search, Sparkles, Sun } from "lucide-react";
+import { Loader2, Moon, Search, Sparkles, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -82,8 +82,10 @@ export function AppHeader({ view, onNav, counts, status, logErrors }: Props) {
 
 function AiStatus({ status }: { status: StatusResponse }) {
   const ok = status.analyzer_configured && status.cv_loaded;
+  const pending = status.analysis_pending;
   const text = ok
-    ? `Analisi AI attiva: CV caricato (${status.cv_chars.toLocaleString("it-IT")} caratteri), max ${status.max_analysis_per_search} offerte per aggiornamento.`
+    ? `Analisi AI attiva su ogni offerta. CV caricato (${status.cv_chars.toLocaleString("it-IT")} caratteri).` +
+      (pending ? ` ${pending} offerte in attesa di analisi.` : " Tutte le offerte sono analizzate.")
     : !status.analyzer_configured
       ? "Analisi AI non attiva: manca la chiave API DeepSeek."
       : "Analisi AI senza CV: monta un CV in PDF per calcolare il match.";
@@ -99,8 +101,12 @@ function AiStatus({ status }: { status: StatusResponse }) {
           />
         }
       >
-        <Sparkles className="size-3.5" />
-        {ok ? "AI attiva" : "AI non attiva"}
+        {ok && pending > 0 ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Sparkles className="size-3.5" />
+        )}
+        {!ok ? "AI non attiva" : pending > 0 ? `AI: ${pending} in coda` : "AI attiva"}
       </TooltipTrigger>
       <TooltipContent className="max-w-64">{text}</TooltipContent>
     </Tooltip>

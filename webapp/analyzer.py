@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 # Environment-driven configuration (read once at import time).
@@ -32,6 +33,12 @@ _API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 _BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 _MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip()
 _CV_PATH = os.environ.get("CV_PATH", "/data/cv.pdf").strip()
+
+# Recorded with every stored analysis so results stay comparable over time.
+PROVIDER = "deepseek"
+MODEL = _MODEL
+# Bump whenever _SYSTEM_PROMPT or _build_user_prompt changes meaningfully.
+PROMPT_VERSION = "v1"
 
 # Keep prompt tokens (and cost) bounded: descriptions can be very long.
 _MAX_DESC_CHARS = 6000
@@ -123,13 +130,17 @@ def analyze_job(job: dict[str, Any], cv_text: str) -> dict[str, Any]:
     """
     Analyze a single job against the CV via DeepSeek.
 
-    Returns a dict with keys: tags (list[str]), summary (str),
-    relevance_score (int 0-100), reasons (list[str]).
+    Returns ``{"result": {...}, "raw": str, "input_tokens": int,
+    "output_tokens": int, "latency_ms": int}`` where ``result`` has keys:
+    tags (list[str]), summary (str), relevance_score (int 0-100),
+    reasons (list[str]). ``raw`` is the untouched model output, kept so the
+    analysis can be re-parsed later.
 
     Raises :class:`AnalyzerNotConfigured` if no API key is set.
     """
     client = _client()
 
+    t0 = time.monotonic()
     response = client.chat.completions.create(
         model=_MODEL,
         messages=[
@@ -140,10 +151,17 @@ def analyze_job(job: dict[str, Any], cv_text: str) -> dict[str, Any]:
         temperature=0.2,
         max_tokens=800,
     )
+    latency_ms = int((time.monotonic() - t0) * 1000)
 
     raw = response.choices[0].message.content or "{}"
-    data = json.loads(raw)
-    return _normalize(data)
+    usage = getattr(response, "usage", None)
+    return {
+        "result": _normalize(json.loads(raw)),
+        "raw": raw,
+        "input_tokens": getattr(usage, "prompt_tokens", None),
+        "output_tokens": getattr(usage, "completion_tokens", None),
+        "latency_ms": latency_ms,
+    }
 
 
 def _normalize(data: dict[str, Any]) -> dict[str, Any]:

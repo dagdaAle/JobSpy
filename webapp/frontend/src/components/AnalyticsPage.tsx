@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Count } from "../api/types";
 import { useAnalytics } from "../hooks";
-import { siteLabel } from "../lib/format";
+import { parseDate, siteLabel } from "../lib/format";
 import { EmptyState } from "./JobGrid";
 
 export function AnalyticsPage() {
@@ -27,18 +27,39 @@ export function AnalyticsPage() {
   }
 
   const k = data.kpis;
+  const db = data.database;
+  const nf = (n: number) => n.toLocaleString("it-IT");
   const sal = data.salary;
   const cur = sal.currency && sal.currency !== "?" ? sal.currency : "€";
   const fmtK = (n?: number) => (n == null ? "—" : `${cur} ${Math.round(n / 1000)}k`);
 
   return (
     <div className="space-y-6">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+        <p className="text-sm text-muted-foreground">
+          Calcolate su tutto il database{db.since ? ` (dal ${formatDate(db.since)})` : ""}, comprese
+          le offerte uscite dal feed.
+        </p>
+      </div>
+
+      <Panel title="Cosa c'è nel database" subtitle="Niente viene cancellato: ogni evento resta salvato">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3 lg:grid-cols-6">
+          <DbStat label="Offerte" value={nf(db.jobs)} hint={`${nf(db.in_feed)} nel feed · ${nf(db.archived)} archiviate`} />
+          <DbStat label="Analizzate dall'AI" value={nf(db.analyzed)} hint={`${db.jobs ? Math.round((db.analyzed / db.jobs) * 100) : 0}% del totale`} />
+          <DbStat label="Analisi eseguite" value={nf(db.analysis_runs)} hint={`${nf(db.analysis_errors)} fallite · ${nf(db.tokens)} token`} />
+          <DbStat label="Avvistamenti" value={nf(db.sightings)} hint={`${nf(db.versions)} versioni dei dati`} />
+          <DbStat label="Like e scarti" value={nf(db.feedback_events)} hint="storico completo, annullamenti compresi" />
+          <DbStat label="Versioni del CV" value={nf(db.cv_versions)} />
+        </dl>
+      </Panel>
+
       <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Stat label="Offerte salvate" value={k.total} />
+        <Stat label="Offerte nel database" value={k.total} />
         <Stat label="Nuove negli ultimi 7 giorni" value={k.new_7d} />
         <Stat label="Da remoto" value={`${k.remote_pct}%`} />
         <Stat label="Match medio AI" value={k.avg_score == null ? "—" : `${k.avg_score}%`} />
-        <Stat label="Analizzate dall'AI" value={k.analyzed} />
+        <Stat label="Uscite dal feed" value={db.archived} />
         <Stat label="Preferite" value={k.favorites} />
         <Stat label="Scartate" value={k.dismissed} />
         <Stat label="Canali" value={k.channels} />
@@ -93,6 +114,21 @@ export function AnalyticsPage() {
       </div>
     </div>
   );
+}
+
+function DbStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-xl font-semibold tabular-nums">{value}</dd>
+      {hint && <dd className="text-xs text-muted-foreground">{hint}</dd>}
+    </div>
+  );
+}
+
+function formatDate(value: string) {
+  const d = parseDate(value);
+  return d ? d.toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" }) : value;
 }
 
 function Stat({ label, value }: { label: string; value: number | string }) {

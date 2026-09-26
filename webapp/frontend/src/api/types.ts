@@ -14,6 +14,8 @@ export interface Job {
   date_posted: string | null;
   job_url: string;
   is_new?: boolean;
+  // UTC "YYYY-MM-DD HH:MM:SS": when we first scraped it (drives the feed expiry).
+  first_seen_at?: string | null;
   // Copies of the same offer (same title+company) collapsed into this card.
   duplicates?: number;
   duplicate_urls?: string[];
@@ -103,7 +105,11 @@ export interface StatusResponse {
   analyzer_configured: boolean;
   cv_loaded: boolean;
   cv_chars: number;
-  max_analysis_per_search: number;
+  // Jobs in the DB still waiting for an AI analysis.
+  analysis_pending: number;
+  analysis_running: boolean;
+  // Days a job without a verdict stays in the feed before being archived.
+  feed_days: number;
 }
 
 export interface JobDetailResponse {
@@ -118,6 +124,21 @@ export interface Count {
 }
 
 export interface AnalyticsResponse {
+  // Whole-database totals (archived jobs and full history included).
+  database: {
+    since: string | null;
+    jobs: number;
+    in_feed: number;
+    archived: number;
+    analyzed: number;
+    analysis_runs: number;
+    analysis_errors: number;
+    tokens: number;
+    sightings: number;
+    versions: number;
+    feedback_events: number;
+    cv_versions: number;
+  };
   kpis: {
     total: number;
     new_7d: number;
@@ -147,12 +168,12 @@ export interface LogEntry {
   id: number;
   started_at: string;
   finished_at: string;
-  kind: "refresh" | "purge";
-  trigger: "scheduler" | "manual" | "create";
+  kind: "refresh" | "analysis" | "archive" | "purge";
+  trigger: "scheduler" | "manual" | "create" | "startup";
   channel_id: number | null;
   channel_name: string | null;
   site: string | null;
-  status: "ok" | "error";
+  status: "running" | "ok" | "error";
   found: number;
   new_count: number;
   analyzed: number;

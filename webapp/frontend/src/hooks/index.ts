@@ -11,8 +11,14 @@ import type {
   Verdict,
 } from "../api/types";
 
+// Polls while the AI backlog is being worked through, so the header counter
+// and the cards' scores fill in without a reload.
 export function useStatus() {
-  return useQuery({ queryKey: ["status"], queryFn: api.status });
+  return useQuery({
+    queryKey: ["status"],
+    queryFn: api.status,
+    refetchInterval: (q) => (q.state.data?.analysis_pending ? 10_000 : 60_000),
+  });
 }
 
 export function useAnalytics() {

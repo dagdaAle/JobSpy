@@ -36,6 +36,13 @@ export function timeAgo(value: string | null | undefined): string {
   return days === 1 ? "ieri" : `${days} giorni fa`;
 }
 
+/** Whole days before a job without a verdict leaves the feed (can be <= 0). */
+export function daysLeftInFeed(firstSeen: string | null | undefined, feedDays: number): number | null {
+  const d = parseDate(firstSeen);
+  if (!d) return null;
+  return Math.ceil((d.getTime() + feedDays * DAY - Date.now()) / DAY);
+}
+
 /** Local "26 set, 09:00". */
 export function formatDateTime(value: string | null | undefined): string {
   const d = parseDate(value);

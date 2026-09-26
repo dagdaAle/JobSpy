@@ -1,5 +1,19 @@
 """
-Persistent storage for user feedback (like / dislike) on job postings.
+Persistent storage for JobSpy: jobs, channels, AI analyses and user verdicts.
+
+Nothing that happens is thrown away. Current-state tables (``jobs``,
+``analysis``, ``feedback``, ``cv``) drive the UI, and append-only history
+tables record every event next to them:
+
+* ``job_sightings``   one row each time a job shows up in a scrape
+* ``job_versions``    a snapshot of the scraped data whenever it changes
+* ``analysis_runs``   every AI analysis attempt (failures included)
+* ``feedback_events`` every like / dislike / undo
+* ``cv_versions``     every distinct CV text
+* ``refresh_log``     every refresh, analysis batch and feed clean-up
+
+Jobs are never deleted: after ``FEED_DAYS`` without a verdict they are only
+*archived* (hidden from the feed) and still count in analytics.
 
 Each job is identified by its ``job_url`` (stable across searches), so a
 like/dislike survives new searches and container restarts. The data lives in a
@@ -9,6 +23,8 @@ single SQLite file whose path is configurable via ``FEEDBACK_DB`` (defaults to
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import os
 import re
@@ -41,14 +57,85 @@ _RICH_JOB_COLUMNS = (
 )
 
 
+# Lifecycle columns on `jobs`: when we first/last saw a job, and when it left
+# the feed (archived_at) and why. raw_json is the latest full JobSpy row.
+_LIFECYCLE_COLUMNS = (
+    "first_seen_at",
+    "last_seen_at",
+    "archived_at",
+    "archive_reason",
+    "raw_json",
+)
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _now() -> str:
+    """UTC timestamp in SQLite's datetime('now') format."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Backups live next to the DB (same persistent volume).
+_BACKUP_DIR = os.environ.get(
+    "BACKUP_DIR", os.path.join(os.path.dirname(os.path.abspath(_DB_PATH)), "backups")
+)
+_DAILY_BACKUPS_KEPT = 14
+
+
+def backup_db(tag: str) -> str | None:
+    """Consistent copy of the DB (SQLite online backup) into ``_BACKUP_DIR``.
+
+    ``daily-*`` copies are rotated (last ``_DAILY_BACKUPS_KEPT`` kept); any
+    other tag (e.g. the pre-migration copy) is kept forever.
+    """
+    if not os.path.exists(_DB_PATH):
+        return None
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(_BACKUP_DIR, f"{tag}-{stamp}.db")
+    src = sqlite3.connect(_DB_PATH, timeout=30)
+    try:
+        with sqlite3.connect(dest) as out:
+            src.backup(out)
+    finally:
+        src.close()
+    if tag == "daily":
+        daily = sorted(f for f in os.listdir(_BACKUP_DIR) if f.startswith("daily-"))
+        for old in daily[:-_DAILY_BACKUPS_KEPT]:
+            os.remove(os.path.join(_BACKUP_DIR, old))
+    return dest
+
+
+def _needs_history_migration() -> bool:
+    """True for an existing DB that predates the history tables."""
+    if not os.path.exists(_DB_PATH):
+        return False
+    with _connect() as conn:
+        has_jobs = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        has_meta = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+        ).fetchone()
+        done = has_meta and conn.execute(
+            "SELECT 1 FROM meta WHERE key = 'history_v1'"
+        ).fetchone()
+    return bool(has_jobs) and not done
+
+
 def init_db() -> None:
-    """Create all tables if they don't exist yet."""
+    """Create all tables if they don't exist yet.
+
+    Before migrating an existing DB to the history schema, a full copy is
+    saved in ``_BACKUP_DIR`` (``pre-history-*.db``, never rotated).
+    """
+    if _needs_history_migration():
+        path = backup_db("pre-history")
+        print(f"[storage] backup before migration: {path}", flush=True)
     with _lock, _connect() as conn:
         conn.execute(
             """
@@ -132,19 +219,20 @@ def init_db() -> None:
             )
             """
         )
-        # One row per update event (channel refresh, purge), shown in the Log page.
+        # One row per update event (refresh, AI analysis batch, feed clean-up), shown
+        # in the Log page. Kept forever.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS refresh_log (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at   TEXT NOT NULL,
                 finished_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                kind         TEXT NOT NULL,   -- 'refresh' | 'purge'
-                trigger      TEXT NOT NULL,   -- 'scheduler' | 'manual' | 'create'
+                kind         TEXT NOT NULL,   -- 'refresh' | 'analysis' | 'archive'
+                trigger      TEXT NOT NULL,   -- 'scheduler' | 'manual' | 'create' | 'startup'
                 channel_id   INTEGER,
                 channel_name TEXT,
                 site         TEXT,
-                status       TEXT NOT NULL,   -- 'ok' | 'error'
+                status       TEXT NOT NULL,   -- 'running' | 'ok' | 'error'
                 found        INTEGER DEFAULT 0,
                 new_count    INTEGER DEFAULT 0,
                 analyzed     INTEGER DEFAULT 0,
@@ -155,7 +243,85 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_sightings (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_url    TEXT NOT NULL,
+                channel_id INTEGER,          -- NULL for ad-hoc /search results
+                run_id     INTEGER,          -- refresh_log.id of the scrape
+                seen_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_versions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_url      TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                data         TEXT NOT NULL,  -- JSON: every column JobSpy returned
+                seen_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_runs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_url         TEXT NOT NULL,
+                provider        TEXT NOT NULL,
+                model           TEXT,
+                prompt_version  TEXT,
+                cv_version_id   INTEGER,
+                status          TEXT NOT NULL,   -- 'ok' | 'error' | 'imported'
+                relevance_score INTEGER,
+                tags            TEXT,            -- JSON array
+                summary         TEXT,
+                reasons         TEXT,            -- JSON array
+                raw_response    TEXT,
+                input_tokens    INTEGER,
+                output_tokens   INTEGER,
+                latency_ms      INTEGER,
+                error           TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feedback_events (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_url    TEXT NOT NULL,
+                verdict    TEXT,             -- NULL = verdict removed
+                previous   TEXT,
+                source     TEXT NOT NULL,    -- user | propagated | inherited | import
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cv_versions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                sha256     TEXT NOT NULL UNIQUE,
+                text       TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        for idx in (
+            "CREATE INDEX IF NOT EXISTS ix_sightings_url ON job_sightings(job_url)",
+            "CREATE INDEX IF NOT EXISTS ix_versions_url ON job_versions(job_url)",
+            "CREATE INDEX IF NOT EXISTS ix_runs_url ON analysis_runs(job_url)",
+            "CREATE INDEX IF NOT EXISTS ix_fbev_url ON feedback_events(job_url)",
+        ):
+            conn.execute(idx)
         _migrate(conn)
+        _backfill_history(conn)
+    with _connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -165,9 +331,63 @@ def _migrate(conn: sqlite3.Connection) -> None:
     volume (with jobs already stored) keeps its data — we only add what's missing.
     """
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
-    for col in _RICH_JOB_COLUMNS:
+    for col in _RICH_JOB_COLUMNS + _LIFECYCLE_COLUMNS:
         if col not in existing:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_jobs_archived ON jobs(archived_at)")
+
+
+def _backfill_history(conn: sqlite3.Connection) -> None:
+    """One-off import of what the DB already knew into the history tables.
+
+    Runs once (guarded by ``meta.history_v1``) so an existing production DB
+    keeps every analysis, verdict and sighting it had before this change.
+    """
+    if conn.execute("SELECT 1 FROM meta WHERE key = 'history_v1'").fetchone():
+        return
+    # First/last seen: earliest/latest channel sighting, else when first stored.
+    conn.execute(
+        """
+        UPDATE jobs SET
+            first_seen_at = COALESCE(
+                (SELECT MIN(first_seen) FROM channel_jobs cj WHERE cj.job_url = jobs.job_url),
+                seen_at),
+            last_seen_at = COALESCE(
+                (SELECT MAX(last_seen) FROM channel_jobs cj WHERE cj.job_url = jobs.job_url),
+                seen_at)
+        WHERE first_seen_at IS NULL
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO job_sightings (job_url, channel_id, seen_at)
+        SELECT job_url, channel_id, first_seen FROM channel_jobs
+        UNION ALL
+        SELECT job_url, channel_id, last_seen FROM channel_jobs WHERE last_seen != first_seen
+        """
+    )
+    cv = conn.execute("SELECT text, updated_at FROM cv WHERE id = 1").fetchone()
+    cv_id = None
+    if cv and cv["text"]:
+        cv_id = _cv_version_conn(conn, cv["text"], cv["updated_at"])
+    conn.execute(
+        """
+        INSERT INTO analysis_runs
+            (job_url, provider, model, prompt_version, cv_version_id, status,
+             relevance_score, tags, summary, reasons, created_at)
+        SELECT job_url, 'deepseek', 'deepseek-chat', 'v1', ?, 'imported',
+               relevance_score, tags, summary, reasons, analyzed_at
+        FROM analysis
+        """,
+        (cv_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO feedback_events (job_url, verdict, previous, source, created_at)
+        SELECT job_url, verdict, NULL, 'import', updated_at FROM feedback
+        """
+    )
+    conn.execute("INSERT INTO meta (key, value) VALUES ('history_v1', ?)", (_now(),))
 
 
 def set_feedback(
@@ -194,14 +414,11 @@ def set_feedback(
         prev_verdict = prev["verdict"] if prev else None
 
         if verdict is None:
-            conn.execute("DELETE FROM feedback WHERE job_url = ?", (job_url,))
+            _clear_feedback(conn, job_url, "user")
             # Toggling off clears the same verdict on the other copies.
             if prev_verdict:
                 for sib in siblings:
-                    conn.execute(
-                        "DELETE FROM feedback WHERE job_url = ? AND verdict = ?",
-                        (sib["job_url"], prev_verdict),
-                    )
+                    _clear_feedback(conn, sib["job_url"], "propagated", only=prev_verdict)
             return
         if verdict not in ("like", "dislike"):
             raise ValueError(f"invalid verdict: {verdict!r}")
@@ -219,13 +436,39 @@ def set_feedback(
             _write_feedback(
                 conn, sib["job_url"], verdict,
                 sib["title"] or "", sib["company"] or "", sib["site"] or "",
+                source="propagated",
             )
+
+
+def _log_feedback_event(
+    conn: sqlite3.Connection, job_url: str, verdict: str | None,
+    previous: str | None, source: str,
+) -> None:
+    if verdict == previous:
+        return
+    conn.execute(
+        "INSERT INTO feedback_events (job_url, verdict, previous, source, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (job_url, verdict, previous, source, _now()),
+    )
+
+
+def _clear_feedback(
+    conn: sqlite3.Connection, job_url: str, source: str, only: str | None = None,
+) -> None:
+    row = conn.execute("SELECT verdict FROM feedback WHERE job_url = ?", (job_url,)).fetchone()
+    if row is None or (only and row["verdict"] != only):
+        return
+    conn.execute("DELETE FROM feedback WHERE job_url = ?", (job_url,))
+    _log_feedback_event(conn, job_url, None, row["verdict"], source)
 
 
 def _write_feedback(
     conn: sqlite3.Connection, job_url: str, verdict: str,
-    title: str, company: str, site: str,
+    title: str, company: str, site: str, source: str = "user",
 ) -> None:
+    row = conn.execute("SELECT verdict FROM feedback WHERE job_url = ?", (job_url,)).fetchone()
+    _log_feedback_event(conn, job_url, verdict, row["verdict"] if row else None, source)
     conn.execute(
         """
         INSERT INTO feedback (job_url, verdict, title, company, site, updated_at)
@@ -264,15 +507,28 @@ _JOB_FIELDS = (
 ) + _RICH_JOB_COLUMNS
 
 
-def _upsert_jobs_conn(conn: sqlite3.Connection, records: list[dict[str, Any]]) -> None:
-    """Insert/update raw job rows on an open connection (no locking)."""
+def _upsert_jobs_conn(
+    conn: sqlite3.Connection,
+    records: list[dict[str, Any]],
+    channel_id: int | None = None,
+    run_id: int | None = None,
+) -> None:
+    """Insert/update raw job rows on an open connection (no locking).
+
+    Also records a sighting per job and, when the scraped data changed, a new
+    snapshot in ``job_versions``. ``first_seen_at`` and ``archived_at`` are
+    never touched by a re-scrape.
+    """
+    now = _now()
     cols = ", ".join(_JOB_FIELDS)
     placeholders = ", ".join("?" for _ in _JOB_FIELDS)
     updates = ", ".join(f"{f} = excluded.{f}" for f in _JOB_FIELDS)
     sql = (
-        f"INSERT INTO jobs (job_url, {cols}, seen_at) "
-        f"VALUES (?, {placeholders}, datetime('now')) "
-        f"ON CONFLICT(job_url) DO UPDATE SET {updates}"
+        f"INSERT INTO jobs (job_url, {cols}, raw_json, seen_at, first_seen_at, last_seen_at) "
+        f"VALUES (?, {placeholders}, ?, ?, ?, ?) "
+        f"ON CONFLICT(job_url) DO UPDATE SET {updates}, "
+        f"raw_json = COALESCE(excluded.raw_json, jobs.raw_json), "
+        f"last_seen_at = excluded.last_seen_at"
     )
     for rec in records:
         url = rec.get("job_url")
@@ -280,7 +536,24 @@ def _upsert_jobs_conn(conn: sqlite3.Connection, records: list[dict[str, Any]]) -
             continue
         # Stringify non-text values (is_remote may be bool) for stable storage.
         values = [None if rec.get(f) is None else str(rec.get(f)) for f in _JOB_FIELDS]
-        conn.execute(sql, (url, *values))
+        snapshot = rec.get("_raw") or {k: v for k, v in rec.items() if not k.startswith("_")}
+        data = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+        conn.execute(sql, (url, *values, data, now, now, now))
+
+        digest = hashlib.sha256(data.encode()).hexdigest()
+        last = conn.execute(
+            "SELECT content_hash FROM job_versions WHERE job_url = ? ORDER BY id DESC LIMIT 1",
+            (url,),
+        ).fetchone()
+        if last is None or last["content_hash"] != digest:
+            conn.execute(
+                "INSERT INTO job_versions (job_url, content_hash, data, seen_at) VALUES (?, ?, ?, ?)",
+                (url, digest, data, now),
+            )
+        conn.execute(
+            "INSERT INTO job_sightings (job_url, channel_id, run_id, seen_at) VALUES (?, ?, ?, ?)",
+            (url, channel_id, run_id, now),
+        )
     _inherit_group_feedback(conn, [r.get("job_url") for r in records if r.get("job_url")])
 
 
@@ -292,10 +565,11 @@ def upsert_jobs(records: list[dict[str, Any]]) -> None:
         _upsert_jobs_conn(conn, records)
 
 
-def get_all_jobs() -> list[dict[str, Any]]:
+def get_all_jobs(include_archived: bool = False) -> list[dict[str, Any]]:
     """
-    Return every stored job as a record, newest first (by ``seen_at``).
+    Return stored jobs as card records, newest first.
 
+    Archived jobs (out of the feed) are left out unless ``include_archived``.
     The ``description`` column is intentionally omitted: the frontend never
     displays it and it keeps the payload small.
     """
@@ -305,15 +579,17 @@ def get_all_jobs() -> list[dict[str, Any]]:
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
                    j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval,
+                   j.salary_currency, j.salary_interval, j.first_seen_at,
                    EXISTS(
                        SELECT 1 FROM channel_jobs cj
                        WHERE cj.job_url = j.job_url
                          AND cj.first_seen = cj.last_seen
                    ) AS is_new
             FROM jobs j
+            WHERE ? OR j.archived_at IS NULL
             ORDER BY j.date_posted DESC, j.seen_at DESC
-            """
+            """,
+            (1 if include_archived else 0,),
         ).fetchall()
         return _group_duplicates(conn, [_row_to_card(row) for row in rows])
 
@@ -389,7 +665,10 @@ def _inherit_group_feedback(conn: sqlite3.Connection, urls: list[str]) -> None:
         if not group:
             continue
         verdict = "like" if "like" in group else "dislike"
-        _write_feedback(conn, url, verdict, r["title"] or "", r["company"] or "", r["site"] or "")
+        _write_feedback(
+            conn, url, verdict, r["title"] or "", r["company"] or "", r["site"] or "",
+            source="inherited",
+        )
 
 
 def _group_duplicates(
@@ -543,7 +822,9 @@ def list_channels() -> list[dict[str, Any]]:
                     COUNT(*) AS total,
                     SUM(CASE WHEN cj.first_seen = cj.last_seen THEN 1 ELSE 0 END) AS new
                 FROM channel_jobs cj
+                JOIN jobs j ON j.job_url = cj.job_url
                 WHERE cj.channel_id = ?
+                  AND j.archived_at IS NULL
                   AND cj.job_url NOT IN (SELECT job_url FROM feedback)
                 """,
                 (ch["id"],),
@@ -578,39 +859,31 @@ def set_hours_old_all(hours: int) -> int:
         return cur.rowcount
 
 
-def purge_old_jobs(days: int = 14) -> int:
+def archive_stale_jobs(days: int = 7) -> int:
     """
-    Delete jobs whose ``date_posted`` is older than ``days`` days, together with
-    their channel links. Liked jobs are ALWAYS kept (favorites are never touched).
+    Take jobs out of the feed when they have waited more than ``days`` since
+    first seen without a like or dislike. Nothing is deleted: the job, its
+    analyses and sightings stay in the DB (``archived_at`` is set) and keep
+    counting in analytics. Jobs with a verdict are never archived.
 
-    Returns how many jobs were removed. Jobs without a parseable date_posted are
-    kept (we can't tell their age).
+    Returns how many jobs were archived.
     """
     with _lock, _connect() as conn:
-        # Jobs to purge: old by date, and NOT liked.
-        urls = [
-            r["job_url"]
-            for r in conn.execute(
-                """
-                SELECT job_url FROM jobs
-                WHERE date_posted IS NOT NULL
-                  AND date_posted != ''
-                  AND date(date_posted) < date('now', ?)
-                  AND job_url NOT IN (
-                      SELECT job_url FROM feedback WHERE verdict = 'like'
-                  )
-                """,
-                (f"-{int(days)} days",),
-            ).fetchall()
-        ]
-        for url in urls:
-            conn.execute("DELETE FROM channel_jobs WHERE job_url = ?", (url,))
-            conn.execute("DELETE FROM jobs WHERE job_url = ?", (url,))
-    return len(urls)
+        cur = conn.execute(
+            """
+            UPDATE jobs SET archived_at = ?, archive_reason = 'no_verdict'
+            WHERE archived_at IS NULL
+              AND first_seen_at IS NOT NULL
+              AND first_seen_at < datetime('now', ?)
+              AND job_url NOT IN (SELECT job_url FROM feedback)
+            """,
+            (_now(), f"-{int(days)} days"),
+        )
+        return cur.rowcount
 
 
 def upsert_channel_jobs(
-    channel_id: int, records: list[dict[str, Any]]
+    channel_id: int, records: list[dict[str, Any]], run_id: int | None = None
 ) -> int:
     """Upsert jobs into `jobs` and link them to the channel.
 
@@ -622,7 +895,7 @@ def upsert_channel_jobs(
         return 0
     new_count = 0
     with _lock, _connect() as conn:
-        _upsert_jobs_conn(conn, records)
+        _upsert_jobs_conn(conn, records, channel_id=channel_id, run_id=run_id)
         for rec in records:
             url = rec.get("job_url")
             if not url:
@@ -660,11 +933,11 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
                    j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval,
+                   j.salary_currency, j.salary_interval, j.first_seen_at,
                    cj.first_seen, cj.last_seen
             FROM channel_jobs cj
             JOIN jobs j ON j.job_url = cj.job_url
-            WHERE cj.channel_id = ?
+            WHERE cj.channel_id = ? AND j.archived_at IS NULL
             ORDER BY cj.last_seen DESC, cj.first_seen DESC
             """,
             (channel_id,),
@@ -687,24 +960,47 @@ _LOG_FIELDS = (
     "duration_ms", "error",
 )
 
-# Keep the log bounded: older rows are dropped on each insert.
-_LOG_RETENTION_DAYS = 90
 
+def start_log(entry: dict[str, Any]) -> int:
+    """Open an update event with status 'running' and return its id.
 
-def add_log(entry: dict[str, Any]) -> None:
-    """Append one update event to ``refresh_log`` (unknown keys are ignored)."""
-    values = [entry.get(f) for f in _LOG_FIELDS]
+    The row is visible in the Log page while the work is in progress and is
+    completed by :func:`finish_log`. Unknown keys are ignored.
+    """
+    row = {**entry, "status": "running", "started_at": entry.get("started_at") or _now()}
+    values = [row.get(f) for f in _LOG_FIELDS]
     cols = ", ".join(_LOG_FIELDS)
     placeholders = ", ".join("?" for _ in _LOG_FIELDS)
     with _lock, _connect() as conn:
-        conn.execute(
-            f"INSERT INTO refresh_log ({cols}, finished_at) "
-            f"VALUES ({placeholders}, datetime('now'))",
-            values,
+        cur = conn.execute(
+            f"INSERT INTO refresh_log ({cols}, finished_at) VALUES ({placeholders}, ?)",
+            (*values, _now()),
         )
+        return int(cur.lastrowid)
+
+
+def finish_log(log_id: int, fields: dict[str, Any]) -> None:
+    """Complete an event opened by :func:`start_log` (status ok/error + counters)."""
+    keys = [f for f in _LOG_FIELDS if f in fields]
+    sets = ", ".join(f"{k} = ?" for k in keys)
+    with _lock, _connect() as conn:
         conn.execute(
-            "DELETE FROM refresh_log WHERE finished_at < datetime('now', ?)",
-            (f"-{_LOG_RETENTION_DAYS} days",),
+            f"UPDATE refresh_log SET {sets}, finished_at = ? WHERE id = ?",
+            (*[fields[k] for k in keys], _now(), log_id),
+        )
+
+
+def add_log(entry: dict[str, Any]) -> None:
+    """Append one already-finished update event (unknown keys are ignored)."""
+    finish_log(start_log(entry), {"status": "ok", **entry})
+
+
+def mark_interrupted_logs() -> None:
+    """Events left 'running' by a restart can never finish: flag them."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE refresh_log SET status = 'error', "
+            "error = 'Interrotto dal riavvio del servizio' WHERE status = 'running'"
         )
 
 
@@ -727,6 +1023,76 @@ def get_analyzed_urls() -> set[str]:
     with _lock, _connect() as conn:
         rows = conn.execute("SELECT job_url FROM analysis").fetchall()
     return {row["job_url"] for row in rows}
+
+
+def add_analysis_run(job_url: str, run: dict[str, Any]) -> None:
+    """Append one analysis attempt to ``analysis_runs`` (success or failure).
+
+    ``run`` keys: provider, model, prompt_version, cv_version_id, status,
+    result (normalised dict, on success), raw_response, input_tokens,
+    output_tokens, latency_ms, error.
+    """
+    result = run.get("result") or {}
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO analysis_runs
+                (job_url, provider, model, prompt_version, cv_version_id, status,
+                 relevance_score, tags, summary, reasons, raw_response,
+                 input_tokens, output_tokens, latency_ms, error, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_url, run.get("provider"), run.get("model"), run.get("prompt_version"),
+                run.get("cv_version_id"), run.get("status", "ok"),
+                result.get("relevance_score"),
+                json.dumps(result["tags"], ensure_ascii=False) if "tags" in result else None,
+                result.get("summary"),
+                json.dumps(result["reasons"], ensure_ascii=False) if "reasons" in result else None,
+                run.get("raw_response"), run.get("input_tokens"), run.get("output_tokens"),
+                run.get("latency_ms"), run.get("error"), _now(),
+            ),
+        )
+
+
+# A job whose analysis failed this many times is not retried automatically.
+_MAX_ANALYSIS_FAILURES = 3
+
+
+def jobs_pending_analysis(limit: int = 50) -> list[dict[str, Any]]:
+    """Jobs (archived included) with no current analysis, oldest first.
+
+    Skips jobs that already failed ``_MAX_ANALYSIS_FAILURES`` times so a
+    broken posting doesn't get paid for forever.
+    """
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT j.job_url, j.title, j.company, j.location, j.is_remote,
+                   j.job_type, j.description
+            FROM jobs j
+            WHERE j.job_url NOT IN (SELECT job_url FROM analysis)
+              AND (SELECT COUNT(*) FROM analysis_runs r
+                   WHERE r.job_url = j.job_url AND r.status = 'error') < ?
+            ORDER BY j.first_seen_at DESC
+            LIMIT ?
+            """,
+            (_MAX_ANALYSIS_FAILURES, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_pending_analysis() -> int:
+    with _lock, _connect() as conn:
+        return conn.execute(
+            """
+            SELECT COUNT(*) FROM jobs j
+            WHERE j.job_url NOT IN (SELECT job_url FROM analysis)
+              AND (SELECT COUNT(*) FROM analysis_runs r
+                   WHERE r.job_url = j.job_url AND r.status = 'error') < ?
+            """,
+            (_MAX_ANALYSIS_FAILURES,),
+        ).fetchone()[0]
 
 
 def set_analysis(job_url: str, analysis: dict[str, Any]) -> None:
@@ -785,9 +1151,30 @@ def _loads_list(value: str | None) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def set_cv_text(text: str) -> None:
-    """Store the current CV text (single row)."""
+def _cv_version_conn(conn: sqlite3.Connection, text: str, created_at: str | None = None) -> int:
+    """Id of the ``cv_versions`` row for this exact text, creating it if new."""
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    row = conn.execute("SELECT id FROM cv_versions WHERE sha256 = ?", (digest,)).fetchone()
+    if row:
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO cv_versions (sha256, text, created_at) VALUES (?, ?, ?)",
+        (digest, text, created_at or _now()),
+    )
+    return int(cur.lastrowid)
+
+
+def current_cv_version_id() -> int | None:
+    """Version id of the CV currently used for analyses (None if no CV)."""
     with _lock, _connect() as conn:
+        row = conn.execute("SELECT text FROM cv WHERE id = 1").fetchone()
+        return _cv_version_conn(conn, row["text"]) if row and row["text"] else None
+
+
+def set_cv_text(text: str) -> None:
+    """Store the current CV text (single row) and record it as a version."""
+    with _lock, _connect() as conn:
+        _cv_version_conn(conn, text)
         conn.execute(
             """
             INSERT INTO cv (id, text, updated_at)
@@ -878,6 +1265,27 @@ def analytics_summary() -> dict[str, Any]:
         new_7d = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE seen_at >= datetime('now', '-7 days')"
         ).fetchone()["n"]
+        one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+        database = {
+            "since": one("SELECT MIN(first_seen_at) FROM jobs"),
+            "jobs": one("SELECT COUNT(*) FROM jobs"),
+            "in_feed": one(
+                "SELECT COUNT(*) FROM jobs WHERE archived_at IS NULL "
+                "AND job_url NOT IN (SELECT job_url FROM feedback)"
+            ),
+            "archived": one("SELECT COUNT(*) FROM jobs WHERE archived_at IS NOT NULL"),
+            "analyzed": one("SELECT COUNT(*) FROM analysis"),
+            "analysis_runs": one("SELECT COUNT(*) FROM analysis_runs"),
+            "analysis_errors": one("SELECT COUNT(*) FROM analysis_runs WHERE status = 'error'"),
+            "tokens": one(
+                "SELECT COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) "
+                "FROM analysis_runs"
+            ),
+            "sightings": one("SELECT COUNT(*) FROM job_sightings"),
+            "versions": one("SELECT COUNT(*) FROM job_versions"),
+            "feedback_events": one("SELECT COUNT(*) FROM feedback_events"),
+            "cv_versions": one("SELECT COUNT(*) FROM cv_versions"),
+        }
 
     total = len(jobs)
     remote = sum(1 for j in jobs if _is_remote_true(j.get("is_remote")))
@@ -962,6 +1370,7 @@ def analytics_summary() -> dict[str, Any]:
     ]
 
     return {
+        "database": database,
         "kpis": {
             "total": total,
             "new_7d": new_7d,

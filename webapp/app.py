@@ -82,12 +82,16 @@ _SALARY_MAP = {
 # Full column set stored for a channel job (rich detail page + analysis).
 _FULL_COLUMNS = _ANALYSIS_COLUMNS + _RICH_PASSTHROUGH + list(_SALARY_MAP.keys())
 
-# Cap analyses per search to bound API cost/latency (overridable via env).
-_MAX_ANALYSIS = int(os.environ.get("MAX_ANALYSIS_PER_SEARCH", "30"))
+# Parallel DeepSeek calls while analyzing. Every job gets analyzed; this only
+# bounds how many requests are in flight at once.
+_ANALYSIS_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "5"))
 
-# Only keep jobs posted within this many days; older ones are purged daily
-# (liked jobs are always kept). Also the recency window sent to the scraper.
-_RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
+# A job with no like/dislike leaves the feed this many days after it was first
+# seen. It is archived, never deleted.
+_FEED_DAYS = int(os.environ.get("FEED_DAYS", "7"))
+
+# Default recency window (hours_old) for /maintenance/recency.
+_RECENCY_DAYS = 14
 
 # Hour of the day (local time, 0-23) at which channels refresh. Default 09:00.
 _REFRESH_HOUR = int(os.environ.get("REFRESH_HOUR", "9"))
@@ -137,15 +141,20 @@ class ChannelRequest(BaseModel):
 @app.on_event("startup")
 def _startup() -> None:
     storage.init_db()
-    # Extract CV text from the mounted PDF once, if we don't have it yet.
+    storage.mark_interrupted_logs()
+    # Re-read the mounted CV at every start: a changed PDF becomes a new CV
+    # version (older analyses stay linked to the CV they were made with).
     try:
-        if not storage.get_cv_text():
-            cv_text = analyzer.extract_pdf_text()
-            if cv_text:
-                storage.set_cv_text(cv_text)
+        cv_text = analyzer.extract_pdf_text()
+        if cv_text:
+            storage.set_cv_text(cv_text)
     except Exception:
         # CV is optional; never block startup on parsing issues.
-        pass
+        traceback.print_exc()
+
+    # Apply the feed rule right away, then analyze whatever is still missing.
+    _archive_stale(trigger="startup")
+    _kick_analysis(trigger="startup")
 
     # Start the background scheduler that refreshes channels daily at a fixed hour.
     thread = threading.Thread(target=_scheduler_loop, daemon=True)
@@ -188,65 +197,141 @@ def _clean_records(
     return records
 
 
-def _analyze_new_jobs(records: list[dict[str, Any]]) -> tuple[int, int]:
-    """
-    Analyze jobs that don't yet have a stored analysis, via DeepSeek.
+def _raw_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Every column JobSpy returned, row by row (same order as _clean_records)."""
+    if df is None or df.empty:
+        return []
+    return _clean_records(df, list(df.columns))
 
-    Runs in a small thread pool (network-bound). Skips silently if the
-    analyzer isn't configured (no API key). Individual failures are ignored
-    so a bad job doesn't sink the whole search.
 
-    Returns ``(analyzed, failed)`` so callers can record it in the update log.
-    """
+def _with_raw(df: pd.DataFrame, columns: list[str]) -> list[dict[str, Any]]:
+    """Records for storage, each carrying its full JobSpy row under ``_raw``."""
+    records = _clean_records(df, columns)
+    for rec, raw in zip(records, _raw_records(df)):
+        rec["_raw"] = raw
+    return records
+
+
+# --------------------------------------------------------------------------- #
+# AI analysis                                                                  #
+# --------------------------------------------------------------------------- #
+# Every job in the DB gets analyzed. A single background worker drains the
+# backlog (jobs without an analysis); refreshes just "kick" it. Each attempt,
+# failed ones included, is stored in analysis_runs.
+
+_analysis_state = threading.Lock()
+_analysis_running = False
+_analysis_requested = False
+
+
+def _analyze_one(rec: dict[str, Any], cv_text: str, cv_version_id: int | None) -> bool:
+    """Analyze one job, store the attempt, return True on success."""
+    base = {
+        "provider": analyzer.PROVIDER,
+        "model": analyzer.MODEL,
+        "prompt_version": analyzer.PROMPT_VERSION,
+        "cv_version_id": cv_version_id,
+    }
+    try:
+        out = analyzer.analyze_job(rec, cv_text)
+    except Exception as exc:
+        storage.add_analysis_run(
+            rec["job_url"], {**base, "status": "error", "error": f"{type(exc).__name__}: {exc}"[:1000]}
+        )
+        return False
+    storage.add_analysis_run(
+        rec["job_url"],
+        {
+            **base,
+            "status": "ok",
+            "result": out["result"],
+            "raw_response": out["raw"],
+            "input_tokens": out["input_tokens"],
+            "output_tokens": out["output_tokens"],
+            "latency_ms": out["latency_ms"],
+        },
+    )
+    storage.set_analysis(rec["job_url"], out["result"])
+    return True
+
+
+def _analyze_backlog(trigger: str) -> None:
+    """Analyze every job still missing an analysis, logging one event per run."""
     if not analyzer.is_configured():
-        return 0, 0
+        return
+    pending_total = storage.count_pending_analysis()
+    if not pending_total:
+        return
+    log_id = storage.start_log({"kind": "analysis", "trigger": trigger, "found": pending_total})
+    t0 = time.monotonic()
+    ok = failed = 0
+    try:
+        cv_text = storage.get_cv_text()
+        cv_version_id = storage.current_cv_version_id()
+        seen: set[str] = set()
+        while True:
+            batch = [r for r in storage.jobs_pending_analysis(50) if r["job_url"] not in seen]
+            if not batch:
+                break
+            seen.update(r["job_url"] for r in batch)
+            with ThreadPoolExecutor(max_workers=_ANALYSIS_WORKERS) as pool:
+                for success in pool.map(lambda r: _analyze_one(r, cv_text, cv_version_id), batch):
+                    ok += success
+                    failed += not success
+    except Exception as exc:
+        storage.finish_log(log_id, {
+            "status": "error", "error": str(exc)[:500], "analyzed": ok,
+            "analysis_failed": failed, "duration_ms": int((time.monotonic() - t0) * 1000),
+        })
+        raise
+    storage.finish_log(log_id, {
+        "status": "ok" if ok or not failed else "error",
+        "error": None if ok or not failed else "Tutte le analisi sono fallite: vedi analysis_runs",
+        "analyzed": ok, "analysis_failed": failed,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
 
-    cv_text = storage.get_cv_text()
-    already = storage.get_analyzed_urls()
-    pending = [
-        r for r in records if r.get("job_url") and r["job_url"] not in already
-    ][:_MAX_ANALYSIS]
-    if not pending:
-        return 0, 0
 
-    def _work(rec: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+def _analysis_worker(trigger: str) -> None:
+    global _analysis_running, _analysis_requested
+    while True:
+        with _analysis_state:
+            if not _analysis_requested:
+                _analysis_running = False
+                return
+            _analysis_requested = False
         try:
-            result = analyzer.analyze_job(rec, cv_text)
-            return rec["job_url"], result
+            _analyze_backlog(trigger)
         except Exception:
-            return None
+            traceback.print_exc()
 
-    analyzed = failed = 0
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(_work, r) for r in pending]
-        for fut in as_completed(futures):
-            out = fut.result()
-            if out is None:
-                failed += 1
-                continue
-            url, result = out
-            storage.set_analysis(url, result)
-            analyzed += 1
-    return analyzed, failed
+
+def _kick_analysis(trigger: str = "manual") -> None:
+    """Make sure the backlog gets analyzed soon, without blocking the caller."""
+    global _analysis_running, _analysis_requested
+    with _analysis_state:
+        _analysis_requested = True
+        if _analysis_running:
+            return
+        _analysis_running = True
+    threading.Thread(target=_analysis_worker, args=(trigger,), daemon=True).start()
 
 
 def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
-    """Scrape a channel's site+query, persist jobs, analyze the new ones.
+    """Scrape a channel's site+query and persist every job and sighting.
 
     Returns the number of jobs new to this channel. Scraping is serialized via
-    ``_scrape_lock`` so the scheduler and manual triggers don't overlap. Every
-    run (successful or not) is recorded in the update log.
+    ``_scrape_lock`` so the scheduler and manual triggers don't overlap. The
+    run is logged; AI analysis of the new jobs happens in the background.
     """
-    started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    t0 = time.monotonic()
-    entry: dict[str, Any] = {
-        "started_at": started,
+    log_id = storage.start_log({
         "kind": "refresh",
         "trigger": trigger,
         "channel_id": channel["id"],
         "channel_name": channel.get("name") or channel["search_term"],
         "site": channel["site"],
-    }
+    })
+    t0 = time.monotonic()
     try:
         with _scrape_lock:
             df = search_site(
@@ -258,27 +343,19 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
                 hours_old=channel.get("hours_old"),
                 is_remote=bool(channel.get("is_remote")),
             )
-
-        records = _clean_records(df, _FULL_COLUMNS)
-        new_count = storage.upsert_channel_jobs(channel["id"], records)
-        # _analyze_new_jobs skips already-analyzed urls, so passing every record
-        # is safe: the analyzer cache prevents re-paying.
-        analyzed, failed = _analyze_new_jobs(records)
+        records = _with_raw(df, _FULL_COLUMNS)
+        new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
     except Exception as exc:
-        entry.update(status="error", error=str(exc)[:500])
+        storage.finish_log(log_id, {
+            "status": "error", "error": str(exc)[:500],
+            "duration_ms": int((time.monotonic() - t0) * 1000),
+        })
         raise
-    else:
-        entry.update(
-            status="ok", found=len(records), new_count=new_count,
-            analyzed=analyzed, analysis_failed=failed,
-        )
-        return new_count
-    finally:
-        entry["duration_ms"] = int((time.monotonic() - t0) * 1000)
-        try:
-            storage.add_log(entry)
-        except Exception:
-            traceback.print_exc()
+    storage.finish_log(log_id, {
+        "status": "ok", "found": len(records), "new_count": new_count,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
+    return new_count
 
 
 def _seconds_until_next_run() -> float:
@@ -293,9 +370,8 @@ def _seconds_until_next_run() -> float:
 
 
 def _refresh_all_channels() -> None:
-    """Refresh every channel once, logging per-channel results."""
-    channels = storage.list_channels()
-    for channel in channels:
+    """Refresh every channel, analyze everything new, then clean the feed."""
+    for channel in storage.list_channels():
         try:
             new_count = _refresh_channel(channel, trigger="scheduler")
             print(
@@ -306,30 +382,30 @@ def _refresh_all_channels() -> None:
         except Exception:
             print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
             traceback.print_exc()
-    # Keep the feeds readable: drop jobs older than the retention window.
-    # Liked jobs are always preserved by purge_old_jobs.
-    _purge(trigger="scheduler")
-
-
-def _purge(days: int = _RETENTION_DAYS, trigger: str = "manual") -> int:
-    """Purge jobs older than ``days`` and record it in the update log."""
-    started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    t0 = time.monotonic()
-    entry: dict[str, Any] = {"started_at": started, "kind": "purge", "trigger": trigger}
-    removed = 0
+    _kick_analysis(trigger="scheduler")
+    _archive_stale(trigger="scheduler")
     try:
-        removed = storage.purge_old_jobs(days)
-        entry.update(status="ok", removed=removed)
-        print("[scheduler] purged %d jobs older than %d days" % (removed, days), flush=True)
-    except Exception as exc:
-        entry.update(status="error", error=str(exc)[:500])
-        traceback.print_exc()
-    entry["duration_ms"] = int((time.monotonic() - t0) * 1000)
-    try:
-        storage.add_log(entry)
+        print("[scheduler] backup: %s" % storage.backup_db("daily"), flush=True)
     except Exception:
         traceback.print_exc()
-    return removed
+
+
+def _archive_stale(days: int = _FEED_DAYS, trigger: str = "manual") -> int:
+    """Archive jobs left without a verdict for ``days`` and log it."""
+    t0 = time.monotonic()
+    log_id = storage.start_log({"kind": "archive", "trigger": trigger})
+    try:
+        archived = storage.archive_stale_jobs(days)
+    except Exception as exc:
+        storage.finish_log(log_id, {"status": "error", "error": str(exc)[:500]})
+        traceback.print_exc()
+        return 0
+    storage.finish_log(log_id, {
+        "status": "ok", "removed": archived,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
+    print("[scheduler] archived %d jobs without a verdict after %d days" % (archived, days), flush=True)
+    return archived
 
 
 def _scheduler_loop() -> None:
@@ -382,9 +458,8 @@ def run_search(req: SearchRequest) -> dict[str, Any]:
     _last_result = df if df is not None else pd.DataFrame()
 
     # Persist raw jobs (with description + rich columns) and analyze new ones.
-    analysis_records = _clean_records(_last_result, _FULL_COLUMNS)
-    storage.upsert_jobs(analysis_records)
-    _analyze_new_jobs(analysis_records)
+    storage.upsert_jobs(_with_raw(_last_result, _FULL_COLUMNS))
+    _kick_analysis()
 
     return {
         "count": int(len(_last_result)),
@@ -414,7 +489,7 @@ def export(format: Literal["csv", "xlsx"] = "csv") -> StreamingResponse:
     if _last_result is not None and not _last_result.empty:
         source = _last_result
     else:
-        source = pd.DataFrame(storage.get_all_jobs())
+        source = pd.DataFrame(storage.get_all_jobs(include_archived=True))
     if source is None or source.empty:
         raise HTTPException(status_code=404, detail="Nessun risultato da esportare: fai prima una ricerca.")
 
@@ -499,6 +574,7 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
     channel = storage.get_channel(channel_id)
     try:
         new_count = _refresh_channel(channel, trigger="create") if channel else 0
+        _kick_analysis(trigger="create")
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"Canale creato ma scraping fallito: {exc}"
@@ -525,6 +601,7 @@ def refresh_channel(channel_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Canale non trovato.")
     try:
         new_count = _refresh_channel(channel)
+        _kick_analysis()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Errore durante lo scraping: {exc}") from exc
     return {"ok": True, "id": channel_id, "new_count": new_count}
@@ -557,13 +634,15 @@ def get_job(url: str) -> dict[str, Any]:
 
 @app.get("/status")
 def status() -> dict[str, Any]:
-    """Report whether AI analysis is available and if a CV is loaded."""
+    """Report AI analysis state (key, CV, backlog) and the feed rule."""
     cv_text = storage.get_cv_text()
     return {
         "analyzer_configured": analyzer.is_configured(),
         "cv_loaded": bool(cv_text),
         "cv_chars": len(cv_text),
-        "max_analysis_per_search": _MAX_ANALYSIS,
+        "analysis_pending": storage.count_pending_analysis(),
+        "analysis_running": _analysis_running,
+        "feed_days": _FEED_DAYS,
     }
 
 
@@ -574,17 +653,24 @@ def analytics() -> dict[str, Any]:
 
 
 @app.post("/maintenance/recency")
-def set_recency(hours: int = _RETENTION_DAYS * 24) -> dict[str, Any]:
+def set_recency(hours: int = _RECENCY_DAYS * 24) -> dict[str, Any]:
     """Set the recency window (hours_old) on every channel."""
     changed = storage.set_hours_old_all(hours)
     return {"ok": True, "channels_updated": changed, "hours_old": hours}
 
 
-@app.post("/maintenance/purge")
-def purge(days: int = _RETENTION_DAYS) -> dict[str, Any]:
-    """Purge jobs older than N days (liked jobs are always kept)."""
-    removed = _purge(days)
-    return {"ok": True, "removed": removed, "days": days}
+@app.post("/maintenance/archive")
+def archive(days: int = _FEED_DAYS) -> dict[str, Any]:
+    """Archive jobs left without a verdict for N days (nothing is deleted)."""
+    archived = _archive_stale(days)
+    return {"ok": True, "archived": archived, "days": days}
+
+
+@app.post("/maintenance/analyze")
+def analyze_backlog() -> dict[str, Any]:
+    """Start analyzing every job that has no AI analysis yet (background)."""
+    _kick_analysis()
+    return {"ok": True, "pending": storage.count_pending_analysis()}
 
 
 @app.get("/logs")

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, Heart, Inbox, SearchX, Sparkles, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,7 +27,7 @@ const VIEW_VERDICT: Record<"feed" | "new" | "saved" | "dismissed", Verdict | nul
 const HEADINGS: Record<"feed" | "new" | "saved" | "dismissed", { title: string; hint: string }> = {
   feed: {
     title: "Offerte da vedere",
-    hint: "Con il cuore l'offerta passa nei Preferiti, con la X finisce tra le Scartate. In entrambi i casi sparisce da qui.",
+    hint: "Con il cuore l'offerta passa nei Preferiti, con la X tra le Scartate. Quelle senza giudizio escono da qui dopo 7 giorni, ma restano salvate nel database.",
   },
   new: { title: "Nuove", hint: "Trovate all'ultimo aggiornamento e non ancora valutate." },
   saved: { title: "Preferiti", hint: "Le offerte che hai messo da parte. Restano qui anche dopo la pulizia dei 14 giorni." },
@@ -57,6 +58,19 @@ export default function App() {
   const source = channelScoped ? scopedJobs : allJobs;
   const logs = useLogs();
   const feedback = useFeedback();
+  const qc = useQueryClient();
+  const feedDays = status.data?.feed_days ?? 7;
+
+  // New AI analyses land in the background: reload the lists when the backlog shrinks.
+  const pending = status.data?.analysis_pending;
+  const lastPending = useRef(pending);
+  useEffect(() => {
+    if (lastPending.current !== undefined && pending !== undefined && pending < lastPending.current) {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+    }
+    lastPending.current = pending;
+  }, [pending, qc]);
 
   const analysisMap = source.data?.analysis ?? {};
   const feedbackMap = source.data?.feedback ?? {};
@@ -190,6 +204,7 @@ export default function App() {
                 jobs={visible}
                 analysis={analysisMap}
                 mode={mode}
+                feedDays={feedDays}
                 loading={source.isLoading}
                 onOpen={setSelected}
                 onLike={onLike}

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Analysis, Job } from "../api/types";
-import { initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
+import { daysLeftInFeed, initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
 
 export type CardMode = "feed" | "saved" | "dismissed";
 
@@ -13,17 +13,19 @@ interface Props {
   job: Job;
   analysis?: Analysis;
   mode: CardMode;
+  feedDays: number;
   onOpen: () => void;
   onLike: () => void;
   onDismiss: () => void;
   onRestore: () => void;
 }
 
-export function JobCard({ job, analysis, mode, onOpen, onLike, onDismiss, onRestore }: Props) {
+export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismiss, onRestore }: Props) {
   const score = analysis?.relevance_score ?? null;
   const salary = salaryLabel(job);
   const tags = analysis?.tags ?? [];
   const locations = job.location?.split(" · ") ?? [];
+  const daysLeft = mode === "feed" ? daysLeftInFeed(job.first_seen_at, feedDays) : null;
 
   return (
     <article
@@ -77,6 +79,16 @@ export function JobCard({ job, analysis, mode, onOpen, onLike, onDismiss, onRest
         <span>{siteLabel(job.site)}</span>
         <span aria-hidden>·</span>
         <span>{timeAgo(job.date_posted)}</span>
+        {daysLeft !== null && daysLeft <= 2 && (
+          <Tooltip>
+            <TooltipTrigger render={<span className="text-score-mid" />}>
+              · {daysLeft <= 0 ? "esce oggi" : daysLeft === 1 ? "esce domani" : `esce tra ${daysLeft} g`}
+            </TooltipTrigger>
+            <TooltipContent>
+              Senza like né scarto esce dal feed {feedDays} giorni dopo essere comparsa. Resta nel database.
+            </TooltipContent>
+          </Tooltip>
+        )}
         <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
           {mode === "feed" && (
             <>

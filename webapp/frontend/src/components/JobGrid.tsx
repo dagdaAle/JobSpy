@@ -7,6 +7,7 @@ interface Props {
   jobs: Job[];
   analysis: Record<string, Analysis>;
   mode: CardMode;
+  feedDays: number;
   loading?: boolean;
   empty: ReactNode;
   onOpen: (job: Job) => void;
@@ -17,7 +18,7 @@ interface Props {
 
 const GRID = "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3";
 
-export function JobGrid({ jobs, analysis, mode, loading, empty, onOpen, onLike, onDismiss, onRestore }: Props) {
+export function JobGrid({ jobs, analysis, mode, feedDays, loading, empty, onOpen, onLike, onDismiss, onRestore }: Props) {
   if (loading) {
     return (
       <div className={GRID}>
@@ -38,6 +39,7 @@ export function JobGrid({ jobs, analysis, mode, loading, empty, onOpen, onLike, 
           job={job}
           analysis={analysis[job.job_url]}
           mode={mode}
+          feedDays={feedDays}
           onOpen={() => onOpen(job)}
           onLike={() => onLike(job)}
           onDismiss={() => onDismiss(job)}
