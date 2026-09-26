@@ -25,6 +25,10 @@ from jobspy import scrape_jobs
 # Boards that operate on the local Indeed/Glassdoor domain (support country_indeed).
 ITALY_LOCAL_SITES = ["indeed", "glassdoor", "linkedin"]
 
+# Italian boards added by this fork: Subito Lavoro (local classifieds) and
+# inPA (public administration competitions). Both take a province as location.
+ITALY_EXTRA_SITES = ["subito", "inpa"]
+
 # Remote-only boards added by this fork.
 REMOTE_ONLY_SITES = ["remotive", "remoteok", "weworkremotely", "workingnomads"]
 

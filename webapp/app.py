@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from jobspy.presets import (
+    ITALY_EXTRA_SITES,
     ITALY_LOCAL_SITES,
     REMOTE_ONLY_SITES,
     search_italy,
@@ -124,7 +125,7 @@ class FeedbackRequest(BaseModel):
 
 
 # All sites that can back a channel.
-_ALL_SITES = ITALY_LOCAL_SITES + REMOTE_ONLY_SITES
+_ALL_SITES = ITALY_LOCAL_SITES + ITALY_EXTRA_SITES + REMOTE_ONLY_SITES
 
 
 class ChannelRequest(BaseModel):
@@ -531,6 +532,24 @@ def export(format: Literal["csv", "xlsx"] = "csv") -> StreamingResponse:
     )
 
 
+def _jobs_envelope(jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Jobs plus the feedback/analysis of those jobs only (not the whole DB,
+    which made per-channel responses huge for MCP clients)."""
+    urls: set[str] = set()
+    for j in jobs:
+        urls.add(j["job_url"])
+        urls.update(j.get("duplicate_urls") or [])
+    feedback = storage.get_all_feedback()
+    analysis = storage.get_all_analysis()
+    return {
+        "count": len(jobs),
+        "jobs": jobs,
+        "feedback": {u: v for u, v in feedback.items() if u in urls},
+        "analysis": {u: v for u, v in analysis.items() if u in urls},
+        "analyzer_configured": analyzer.is_configured(),
+    }
+
+
 @app.get("/jobs")
 def list_jobs() -> dict[str, Any]:
     """
@@ -538,14 +557,7 @@ def list_jobs() -> dict[str, Any]:
     scraping. Used to repopulate the UI on page load / refresh so we don't
     re-run the scrape and AI analysis every time.
     """
-    jobs = storage.get_all_jobs()
-    return {
-        "count": len(jobs),
-        "jobs": jobs,
-        "feedback": storage.get_all_feedback(),
-        "analysis": storage.get_all_analysis(),
-        "analyzer_configured": analyzer.is_configured(),
-    }
+    return _jobs_envelope(storage.get_all_jobs())
 
 
 @app.get("/channels")
@@ -611,14 +623,7 @@ def refresh_channel(channel_id: int) -> dict[str, Any]:
 def channel_jobs(channel_id: int) -> dict[str, Any]:
     if storage.get_channel(channel_id) is None:
         raise HTTPException(status_code=404, detail="Canale non trovato.")
-    jobs = storage.get_channel_jobs(channel_id)
-    return {
-        "count": len(jobs),
-        "jobs": jobs,
-        "feedback": storage.get_all_feedback(),
-        "analysis": storage.get_all_analysis(),
-        "analyzer_configured": analyzer.is_configured(),
-    }
+    return _jobs_envelope(storage.get_channel_jobs(channel_id))
 
 
 @app.get("/job")
