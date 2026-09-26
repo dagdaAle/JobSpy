@@ -188,16 +188,18 @@ def _clean_records(
     return records
 
 
-def _analyze_new_jobs(records: list[dict[str, Any]]) -> None:
+def _analyze_new_jobs(records: list[dict[str, Any]]) -> tuple[int, int]:
     """
     Analyze jobs that don't yet have a stored analysis, via DeepSeek.
 
     Runs in a small thread pool (network-bound). Skips silently if the
     analyzer isn't configured (no API key). Individual failures are ignored
     so a bad job doesn't sink the whole search.
+
+    Returns ``(analyzed, failed)`` so callers can record it in the update log.
     """
     if not analyzer.is_configured():
-        return
+        return 0, 0
 
     cv_text = storage.get_cv_text()
     already = storage.get_analyzed_urls()
@@ -205,7 +207,7 @@ def _analyze_new_jobs(records: list[dict[str, Any]]) -> None:
         r for r in records if r.get("job_url") and r["job_url"] not in already
     ][:_MAX_ANALYSIS]
     if not pending:
-        return
+        return 0, 0
 
     def _work(rec: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         try:
@@ -214,45 +216,69 @@ def _analyze_new_jobs(records: list[dict[str, Any]]) -> None:
         except Exception:
             return None
 
+    analyzed = failed = 0
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(_work, r) for r in pending]
         for fut in as_completed(futures):
             out = fut.result()
-            if out is not None:
-                url, result = out
-                storage.set_analysis(url, result)
+            if out is None:
+                failed += 1
+                continue
+            url, result = out
+            storage.set_analysis(url, result)
+            analyzed += 1
+    return analyzed, failed
 
 
-def _refresh_channel(channel: dict[str, Any]) -> int:
+def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
     """Scrape a channel's site+query, persist jobs, analyze the new ones.
 
     Returns the number of jobs new to this channel. Scraping is serialized via
-    ``_scrape_lock`` so the scheduler and manual triggers don't overlap.
+    ``_scrape_lock`` so the scheduler and manual triggers don't overlap. Every
+    run (successful or not) is recorded in the update log.
     """
-    with _scrape_lock:
-        df = search_site(
-            channel["site"],
-            channel["search_term"],
-            location=channel.get("location") or "",
-            distance_km=channel.get("distance_km") or 25,
-            results_wanted=channel.get("results_wanted") or 25,
-            hours_old=channel.get("hours_old"),
-            is_remote=bool(channel.get("is_remote")),
-        )
-
-    records = _clean_records(df, _FULL_COLUMNS)
-    new_count = storage.upsert_channel_jobs(channel["id"], records)
-
-    # Only analyze jobs that are new for this channel (bounds cost).
-    new_urls = {
-        r["job_url"]
-        for r in records
-        if r.get("job_url")
+    started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    t0 = time.monotonic()
+    entry: dict[str, Any] = {
+        "started_at": started,
+        "kind": "refresh",
+        "trigger": trigger,
+        "channel_id": channel["id"],
+        "channel_name": channel.get("name") or channel["search_term"],
+        "site": channel["site"],
     }
-    # _analyze_new_jobs already skips already-analyzed urls, so pass all records
-    # belonging to this channel; the analyzer cache prevents re-paying.
-    _analyze_new_jobs(records)
-    return new_count
+    try:
+        with _scrape_lock:
+            df = search_site(
+                channel["site"],
+                channel["search_term"],
+                location=channel.get("location") or "",
+                distance_km=channel.get("distance_km") or 25,
+                results_wanted=channel.get("results_wanted") or 25,
+                hours_old=channel.get("hours_old"),
+                is_remote=bool(channel.get("is_remote")),
+            )
+
+        records = _clean_records(df, _FULL_COLUMNS)
+        new_count = storage.upsert_channel_jobs(channel["id"], records)
+        # _analyze_new_jobs skips already-analyzed urls, so passing every record
+        # is safe: the analyzer cache prevents re-paying.
+        analyzed, failed = _analyze_new_jobs(records)
+    except Exception as exc:
+        entry.update(status="error", error=str(exc)[:500])
+        raise
+    else:
+        entry.update(
+            status="ok", found=len(records), new_count=new_count,
+            analyzed=analyzed, analysis_failed=failed,
+        )
+        return new_count
+    finally:
+        entry["duration_ms"] = int((time.monotonic() - t0) * 1000)
+        try:
+            storage.add_log(entry)
+        except Exception:
+            traceback.print_exc()
 
 
 def _seconds_until_next_run() -> float:
@@ -271,7 +297,7 @@ def _refresh_all_channels() -> None:
     channels = storage.list_channels()
     for channel in channels:
         try:
-            new_count = _refresh_channel(channel)
+            new_count = _refresh_channel(channel, trigger="scheduler")
             print(
                 "[scheduler] channel %s (%s): %d new"
                 % (channel["id"], channel["site"], new_count),
@@ -282,12 +308,28 @@ def _refresh_all_channels() -> None:
             traceback.print_exc()
     # Keep the feeds readable: drop jobs older than the retention window.
     # Liked jobs are always preserved by purge_old_jobs.
+    _purge(trigger="scheduler")
+
+
+def _purge(days: int = _RETENTION_DAYS, trigger: str = "manual") -> int:
+    """Purge jobs older than ``days`` and record it in the update log."""
+    started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    t0 = time.monotonic()
+    entry: dict[str, Any] = {"started_at": started, "kind": "purge", "trigger": trigger}
+    removed = 0
     try:
-        removed = storage.purge_old_jobs(_RETENTION_DAYS)
-        print("[scheduler] purged %d jobs older than %d days"
-              % (removed, _RETENTION_DAYS), flush=True)
+        removed = storage.purge_old_jobs(days)
+        entry.update(status="ok", removed=removed)
+        print("[scheduler] purged %d jobs older than %d days" % (removed, days), flush=True)
+    except Exception as exc:
+        entry.update(status="error", error=str(exc)[:500])
+        traceback.print_exc()
+    entry["duration_ms"] = int((time.monotonic() - t0) * 1000)
+    try:
+        storage.add_log(entry)
     except Exception:
         traceback.print_exc()
+    return removed
 
 
 def _scheduler_loop() -> None:
@@ -456,7 +498,7 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
     )
     channel = storage.get_channel(channel_id)
     try:
-        new_count = _refresh_channel(channel) if channel else 0
+        new_count = _refresh_channel(channel, trigger="create") if channel else 0
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"Canale creato ma scraping fallito: {exc}"
@@ -541,8 +583,14 @@ def set_recency(hours: int = _RETENTION_DAYS * 24) -> dict[str, Any]:
 @app.post("/maintenance/purge")
 def purge(days: int = _RETENTION_DAYS) -> dict[str, Any]:
     """Purge jobs older than N days (liked jobs are always kept)."""
-    removed = storage.purge_old_jobs(days)
+    removed = _purge(days)
     return {"ok": True, "removed": removed, "days": days}
+
+
+@app.get("/logs")
+def logs(limit: int = 200) -> dict[str, Any]:
+    """Recent update events (channel refreshes, purges), newest first."""
+    return {"logs": storage.list_logs(max(1, min(limit, 1000)))}
 
 
 # Serve the SPA. Mounted last so API routes take precedence.

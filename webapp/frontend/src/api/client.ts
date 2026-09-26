@@ -4,6 +4,7 @@ import type {
   ChannelsResponse,
   JobsResponse,
   JobDetailResponse,
+  LogsResponse,
   SearchRequest,
   StatusResponse,
   Verdict,
@@ -86,6 +87,8 @@ export const api = {
 
   channelJobs: (id: number) =>
     req<JobsResponse>(`/channels/${id}/jobs`).then(normJobs),
+
+  logs: (limit = 300) => req<LogsResponse>(`/logs?limit=${limit}`),
 
   exportUrl: (format: "csv" | "xlsx") => `/export?format=${format}`,
 };

@@ -132,6 +132,29 @@ def init_db() -> None:
             )
             """
         )
+        # One row per update event (channel refresh, purge), shown in the Log page.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refresh_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at   TEXT NOT NULL,
+                finished_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                kind         TEXT NOT NULL,   -- 'refresh' | 'purge'
+                trigger      TEXT NOT NULL,   -- 'scheduler' | 'manual' | 'create'
+                channel_id   INTEGER,
+                channel_name TEXT,
+                site         TEXT,
+                status       TEXT NOT NULL,   -- 'ok' | 'error'
+                found        INTEGER DEFAULT 0,
+                new_count    INTEGER DEFAULT 0,
+                analyzed     INTEGER DEFAULT 0,
+                analysis_failed INTEGER DEFAULT 0,
+                removed      INTEGER DEFAULT 0,
+                duration_ms  INTEGER DEFAULT 0,
+                error        TEXT
+            )
+            """
+        )
         _migrate(conn)
 
 
@@ -502,7 +525,11 @@ def get_channel(channel_id: int) -> dict[str, Any] | None:
 
 
 def list_channels() -> list[dict[str, Any]]:
-    """Return all channels with ``total_count`` and ``new_count`` per channel."""
+    """Return all channels with per-channel counts.
+
+    ``total_count`` / ``new_count`` only count jobs still to review (no like or
+    dislike yet), so a channel empties out as the user triages it.
+    """
     with _lock, _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM channels ORDER BY created_at ASC"
@@ -514,13 +541,25 @@ def list_channels() -> list[dict[str, Any]]:
                 """
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN first_seen = last_seen THEN 1 ELSE 0 END) AS new
-                FROM channel_jobs WHERE channel_id = ?
+                    SUM(CASE WHEN cj.first_seen = cj.last_seen THEN 1 ELSE 0 END) AS new
+                FROM channel_jobs cj
+                WHERE cj.channel_id = ?
+                  AND cj.job_url NOT IN (SELECT job_url FROM feedback)
                 """,
                 (ch["id"],),
             ).fetchone()
             ch["total_count"] = counts["total"] or 0
             ch["new_count"] = counts["new"] or 0
+            last = conn.execute(
+                """
+                SELECT finished_at, status FROM refresh_log
+                WHERE channel_id = ? AND kind = 'refresh'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (ch["id"],),
+            ).fetchone()
+            ch["last_refresh_at"] = last["finished_at"] if last else None
+            ch["last_refresh_status"] = last["status"] if last else None
             channels.append(ch)
     return channels
 
@@ -636,6 +675,46 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
             rec["is_new"] = rec.pop("first_seen") == rec.pop("last_seen")
             jobs.append(rec)
         return _group_duplicates(conn, jobs)
+
+
+# --------------------------------------------------------------------------- #
+# Refresh log                                                                  #
+# --------------------------------------------------------------------------- #
+
+_LOG_FIELDS = (
+    "started_at", "kind", "trigger", "channel_id", "channel_name", "site",
+    "status", "found", "new_count", "analyzed", "analysis_failed", "removed",
+    "duration_ms", "error",
+)
+
+# Keep the log bounded: older rows are dropped on each insert.
+_LOG_RETENTION_DAYS = 90
+
+
+def add_log(entry: dict[str, Any]) -> None:
+    """Append one update event to ``refresh_log`` (unknown keys are ignored)."""
+    values = [entry.get(f) for f in _LOG_FIELDS]
+    cols = ", ".join(_LOG_FIELDS)
+    placeholders = ", ".join("?" for _ in _LOG_FIELDS)
+    with _lock, _connect() as conn:
+        conn.execute(
+            f"INSERT INTO refresh_log ({cols}, finished_at) "
+            f"VALUES ({placeholders}, datetime('now'))",
+            values,
+        )
+        conn.execute(
+            "DELETE FROM refresh_log WHERE finished_at < datetime('now', ?)",
+            (f"-{_LOG_RETENTION_DAYS} days",),
+        )
+
+
+def list_logs(limit: int = 200) -> list[dict[str, Any]]:
+    """Most recent update events first."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM refresh_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #

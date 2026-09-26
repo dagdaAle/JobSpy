@@ -14,6 +14,9 @@ export interface Job {
   date_posted: string | null;
   job_url: string;
   is_new?: boolean;
+  // Copies of the same offer (same title+company) collapsed into this card.
+  duplicates?: number;
+  duplicate_urls?: string[];
   // Rich fields (present on stored/channel jobs).
   job_url_direct?: string | null;
   company_url?: string | null;
@@ -53,8 +56,11 @@ export interface Channel {
   hours_old: number | null;
   is_remote: boolean;
   created_at?: string;
+  // Counts only jobs still to review (no like/dislike yet).
   total_count?: number;
   new_count?: number;
+  last_refresh_at?: string | null;
+  last_refresh_status?: "ok" | "error" | null;
 }
 
 export interface SearchRequest {
@@ -134,4 +140,28 @@ export interface AnalyticsResponse {
   top_companies: Count[];
   top_industries: Count[];
   remote_by_site: { site: string; remote: number; onsite: number }[];
+}
+
+// One update event from /logs. Timestamps are UTC "YYYY-MM-DD HH:MM:SS".
+export interface LogEntry {
+  id: number;
+  started_at: string;
+  finished_at: string;
+  kind: "refresh" | "purge";
+  trigger: "scheduler" | "manual" | "create";
+  channel_id: number | null;
+  channel_name: string | null;
+  site: string | null;
+  status: "ok" | "error";
+  found: number;
+  new_count: number;
+  analyzed: number;
+  analysis_failed: number;
+  removed: number;
+  duration_ms: number;
+  error: string | null;
+}
+
+export interface LogsResponse {
+  logs: LogEntry[];
 }

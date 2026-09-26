@@ -1,136 +1,181 @@
-import { Icon } from "./Icon";
-import type { Analysis, Feedback, Job } from "../api/types";
-import {
-  initial,
-  salaryLabel,
-  scoreColor,
-  siteBadge,
-  timeAgo,
-} from "../lib/format";
+import { useState } from "react";
+import { Heart, MapPin, Undo2, Wallet, Wifi, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import type { Analysis, Job } from "../api/types";
+import { initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
+
+export type CardMode = "feed" | "saved" | "dismissed";
 
 interface Props {
   job: Job;
   analysis?: Analysis;
-  feedback?: Feedback;
+  mode: CardMode;
   onOpen: () => void;
   onLike: () => void;
   onDismiss: () => void;
+  onRestore: () => void;
 }
 
-export function JobCard({ job, analysis, feedback, onOpen, onLike, onDismiss }: Props) {
+export function JobCard({ job, analysis, mode, onOpen, onLike, onDismiss, onRestore }: Props) {
   const score = analysis?.relevance_score ?? null;
   const salary = salaryLabel(job);
-  const liked = feedback?.verdict === "like";
   const tags = analysis?.tags ?? [];
+  const locations = job.location?.split(" · ") ?? [];
 
   return (
-    <div
+    <article
       onClick={onOpen}
-      className="bg-surface-container border-thick border-black neo-shadow hover:neo-shadow-lg hover:-translate-y-1 transition-all group flex flex-col h-full cursor-pointer"
+      className="group flex h-full cursor-pointer flex-col rounded-xl border bg-card text-card-foreground shadow-xs transition-[border-color,box-shadow] hover:border-foreground/15 hover:shadow-md"
     >
-      <div className="p-6 flex flex-col h-full">
-        <div className="flex justify-between items-start mb-4">
-          <div className="w-12 h-12 bg-primary-fixed-dim border-thin border-black flex items-center justify-center text-headline-md text-black font-black shrink-0">
-            {initial(job.company)}
+      <div className="flex flex-1 flex-col gap-4 p-5">
+        <header className="flex items-start gap-3">
+          <CompanyAvatar name={job.company} logo={job.company_logo} />
+          <div className="min-w-0 flex-1">
+            <h3 className="line-clamp-2 font-medium leading-snug text-foreground group-hover:text-primary">
+              {job.title}
+            </h3>
+            <p className="mt-0.5 truncate text-sm text-muted-foreground">{job.company}</p>
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-1">
-              {job.is_new && (
-                <span className="px-2 py-0.5 text-[10px] font-black uppercase border-thin border-black bg-secondary-fixed text-on-secondary-fixed">
-                  NEW
-                </span>
-              )}
-              <span
-                className={`px-2 py-0.5 text-[10px] font-black uppercase border-thin border-black ${siteBadge(
-                  job.site,
-                )}`}
-              >
-                {job.site}
-              </span>
-            </div>
-            <span className="text-outline text-meta-xs">{timeAgo(job.date_posted)}</span>
-          </div>
+          {job.is_new && (
+            <Badge className="bg-primary/12 text-primary dark:bg-primary/15">Nuovo</Badge>
+          )}
+        </header>
+
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
+          {job.is_remote ? (
+            <Meta icon={<Wifi />}>Remoto</Meta>
+          ) : (
+            locations[0] && (
+              <Meta icon={<MapPin />}>
+                {locations[0]}
+                {locations.length > 1 && ` +${locations.length - 1}`}
+              </Meta>
+            )
+          )}
+          {salary && <Meta icon={<Wallet />}>{salary}</Meta>}
         </div>
 
-        <h3 className="text-headline-md uppercase leading-tight group-hover:text-primary-fixed transition-colors mb-1 line-clamp-2">
-          {job.title}
-        </h3>
-        <p className="text-meta-sm text-on-surface-variant uppercase mb-4 line-clamp-1">
-          {job.company}
-        </p>
-
-        <div className="flex flex-wrap gap-2 mb-6">
-          {job.location && (
-            <span className="bg-surface-container-highest border-thin border-black px-2 py-1 text-[10px] font-black uppercase text-outline">
-              {job.location}
-            </span>
-          )}
-          {job.is_remote && (
-            <span className="bg-primary-container/20 text-primary-fixed border-thin border-primary-fixed px-2 py-1 text-[10px] font-black uppercase">
-              Remote
-            </span>
-          )}
-          {salary && (
-            <span className="bg-surface-container-highest border-thin border-black px-2 py-1 text-[10px] font-black uppercase text-outline">
-              {salary}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-auto space-y-4">
-          {score != null && (
-            <div className="bg-black/40 p-3 border-thin border-black">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-meta-xs uppercase text-outline">AI Relevance Score</span>
-                <span className={`text-meta-sm font-black ${scoreColor(score).text}`}>
-                  {score}%
-                </span>
-              </div>
-              <div className="w-full h-2 bg-surface-container-lowest border-thin border-black">
-                <div
-                  className={`h-full ${scoreColor(score).bar}`}
-                  style={{ width: `${score}%` }}
-                />
-              </div>
-            </div>
-          )}
+        <div className="mt-auto space-y-3">
+          {score != null && <ScoreBar score={score} />}
           {tags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1.5">
               {tags.slice(0, 4).map((t) => (
-                <span
-                  key={t}
-                  className="text-[9px] font-black px-1.5 py-0.5 bg-tertiary-container text-on-tertiary-container uppercase"
-                >
+                <Badge key={t} variant="secondary" className="font-normal">
                   {t}
-                </span>
+                </Badge>
               ))}
             </div>
           )}
         </div>
       </div>
 
-      <div className="flex border-t-thick border-black">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onLike();
-          }}
-          className={`flex-1 py-3 flex items-center justify-center transition-colors border-r-thick border-black hover:bg-primary-container hover:text-on-primary-fixed ${
-            liked ? "bg-primary-container text-on-primary-fixed" : ""
-          }`}
-        >
-          <Icon name="favorite" filled={liked} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDismiss();
-          }}
-          className="flex-1 py-3 flex items-center justify-center hover:bg-error-container hover:text-on-error transition-colors"
-        >
-          <Icon name="close" />
-        </button>
+      <footer className="flex items-center gap-2 border-t px-5 py-2.5 text-xs text-muted-foreground">
+        <span className={cn("size-1.5 rounded-full", siteDot(job.site))} />
+        <span>{siteLabel(job.site)}</span>
+        <span aria-hidden>·</span>
+        <span>{timeAgo(job.date_posted)}</span>
+        <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
+          {mode === "feed" && (
+            <>
+              <CardAction label="Scarta" onClick={onDismiss} className="hover:text-destructive">
+                <X />
+              </CardAction>
+              <CardAction label="Aggiungi ai preferiti" onClick={onLike} className="hover:text-rose-500">
+                <Heart />
+              </CardAction>
+            </>
+          )}
+          {mode === "saved" && (
+            <CardAction label="Togli dai preferiti" onClick={onRestore} className="text-rose-500">
+              <Heart className="fill-current" />
+            </CardAction>
+          )}
+          {mode === "dismissed" && (
+            <CardAction label="Rimetti tra le offerte" onClick={onRestore}>
+              <Undo2 />
+            </CardAction>
+          )}
+        </div>
+      </footer>
+    </article>
+  );
+}
+
+function Meta({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0">
+      {icon}
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
+export function ScoreBar({ score }: { score: number }) {
+  const c = scoreColor(score);
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", c.bar)} style={{ width: `${score}%` }} />
       </div>
+      <span className={cn("text-xs font-medium tabular-nums", c.text)}>{score}% match</span>
     </div>
   );
+}
+
+function CardAction({
+  label,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            onClick={onClick}
+            className={cn("text-muted-foreground", className)}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+export function CompanyAvatar({
+  name,
+  logo,
+  className,
+}: {
+  name: string | null;
+  logo?: string | null;
+  className?: string;
+}) {
+  const [broken, setBroken] = useState(false);
+  const base = cn(
+    "flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted text-sm font-semibold text-muted-foreground",
+    className,
+  );
+  if (logo && !broken) {
+    return (
+      <div className={cn(base, "bg-white")}>
+        <img src={logo} alt="" className="size-full object-contain" onError={() => setBroken(true)} />
+      </div>
+    );
+  }
+  return <div className={base}>{initial(name)}</div>;
 }

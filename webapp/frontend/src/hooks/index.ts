@@ -33,6 +33,16 @@ export function useChannels() {
   return useQuery({ queryKey: ["channels"], queryFn: api.channels });
 }
 
+// Update log. Polls while the page is open so a running refresh shows up.
+export function useLogs(enabled = true) {
+  return useQuery({
+    queryKey: ["logs"],
+    queryFn: () => api.logs(),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
 // The active job list. `channelId === null` means "all stored jobs" (/jobs);
 // a number scopes to one channel's jobs.
 export function useJobs(channelId: number | null) {
@@ -58,9 +68,10 @@ export function useCreateChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ChannelRequest) => api.createChannel(body),
-    onSuccess: () => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["channels"] });
       qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
     },
   });
 }
@@ -69,7 +80,10 @@ export function useDeleteChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.deleteChannel(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["channels"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["channels"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
+    },
   });
 }
 
@@ -77,9 +91,11 @@ export function useRefreshChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.refreshChannel(id),
-    onSuccess: () => {
+    // Settled, not success: a failed refresh is logged too.
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["channels"] });
       qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
     },
   });
 }
@@ -112,8 +128,11 @@ export function useFeedback() {
       ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     // Deliberately no jobs refetch here: the optimistic cache already matches
-    // the server, and an immediate refetch was reverting the UI. Analytics
-    // (favourites count) refreshes on its own next load.
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics"] }),
+    // the server, and an immediate refetch was reverting the UI. Channel
+    // counts only include jobs still to review, so those do need a refresh.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+      qc.invalidateQueries({ queryKey: ["channels"] });
+    },
   });
 }

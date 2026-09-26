@@ -1,5 +1,7 @@
 import { defineConfig } from "vite";
+import path from "node:path";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // API routes handled by the FastAPI backend. In dev these are proxied to the
 // running uvicorn server (default :8000). In prod, Vite builds into
@@ -13,6 +15,7 @@ const API_ROUTES = [
   "/analytics",
   "/export",
   "/feedback",
+  "/logs",
 ];
 
 // The JobSpy backend is exposed on host :8080 (docker-compose maps 8080->8000).
@@ -20,7 +23,10 @@ const API_ROUTES = [
 const BACKEND = process.env.VITE_BACKEND ?? "http://localhost:8080";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "./src") },
+  },
   server: {
     port: 5173,
     proxy: Object.fromEntries(
