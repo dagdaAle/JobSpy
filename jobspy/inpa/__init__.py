@@ -38,7 +38,8 @@ class InPA(Scraper):
     administration's official recruiting portal: public competitions
     (concorsi), notices and mobility.
 
-    Uses the portal's public search API (no login). Only notices still open
+    Uses the portal's public search API (no login). A search term of "*"
+    returns every open notice in the area. Only notices still open
     for applications are returned. The API has no reliable place filter, so
     ``location`` is applied client-side on the notice's "sedi": a notice is
     kept when it names the province, is region-wide for that province's
@@ -68,7 +69,12 @@ class InPA(Scraper):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        body = {"text": scraper_input.search_term or "", "status": ["OPEN"]}
+        # "*" (or "tutti") means every open notice in the area: channels need a
+        # non-empty search term, and the AI score then ranks them against the CV.
+        term = (scraper_input.search_term or "").strip()
+        if term.lower() in ("*", "tutti", "tutto"):
+            term = ""
+        body = {"text": term, "status": ["OPEN"]}
         wanted = scraper_input.results_wanted or 15
         jobs: list[JobPost] = []
         page = 0
