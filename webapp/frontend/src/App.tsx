@@ -1,3 +1,5 @@
+import { api } from "./api/client";
+import { ApplicationsPage } from "./components/ApplicationsPage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -17,21 +19,25 @@ import { parseDate } from "./lib/format";
 
 // Which verdict each job-list view shows. Liked and dismissed jobs leave the
 // feed: the feed is only what is still to review.
-const VIEW_VERDICT: Record<"feed" | "new" | "saved" | "dismissed", Verdict | null> = {
+const VIEW_VERDICT: Record<"feed" | "new" | "saved" | "dismissed" | "archived" | "applications", Verdict | null> = {
   feed: null,
   new: null,
   saved: "like",
   dismissed: "dislike",
+  archived: null,
+  applications: null,
 };
 
-const HEADINGS: Record<"feed" | "new" | "saved" | "dismissed", { title: string; hint: string }> = {
+const HEADINGS: Record<"feed" | "new" | "saved" | "dismissed" | "archived" | "applications", { title: string; hint: string }> = {
+  archived: { title: "Archivio", hint: "Offerte uscite dal feed. Puoi recuperarle e valutarle di nuovo." },
+  applications: { title: "Candidature", hint: "Stato, note e prossimi passi delle offerte che stai seguendo." },
   feed: {
     title: "Offerte da vedere",
-    hint: "Con il cuore l'offerta passa nei Preferiti, con la X tra le Scartate. Quelle senza giudizio escono da qui dopo 7 giorni, ma restano salvate nel database.",
+    hint: "Con il cuore l'offerta passa nei Preferiti, con la X tra le Scartate. Le offerte senza giudizio né candidatura passano automaticamente in Archivio.",
   },
   new: { title: "Nuove", hint: "Trovate all'ultimo aggiornamento e non ancora valutate." },
-  saved: { title: "Preferiti", hint: "Le offerte che hai messo da parte. Restano qui anche dopo la pulizia dei 14 giorni." },
-  dismissed: { title: "Scartate", hint: "Non tornano nel feed nemmeno se ripubblicate. Puoi rimetterle tra le offerte." },
+  saved: { title: "Preferiti", hint: "Le offerte che hai messo da parte. Restano qui anche dopo l’archiviazione automatica." },
+  dismissed: { title: "Scartate", hint: "Le copie riconosciute dello stesso annuncio restano scartate. Puoi rimetterle tra le offerte." },
 };
 
 const verdictOf = (fb: Record<string, Feedback>, job: Job) => fb[job.job_url]?.verdict ?? null;
@@ -47,7 +53,7 @@ export default function App() {
     sort: "recent",
   });
 
-  const listView = view === "feed" || view === "new" || view === "saved" || view === "dismissed";
+  const listView = view !== "analytics" && view !== "logs" && view !== "applications";
   // Channels only scope the "to review" views; saved/dismissed span everything.
   const channelScoped = (view === "feed" || view === "new") && activeChannelId !== null;
 
@@ -55,7 +61,8 @@ export default function App() {
   const channels = useChannels();
   const allJobs = useJobs(null);
   const scopedJobs = useJobs(channelScoped ? activeChannelId : null);
-  const source = channelScoped ? scopedJobs : allJobs;
+  const extraJobs = useJobs(null, view === "archived" ? "archived" : view === "applications" ? "applications" : "active");
+  const source = view === "archived" || view === "applications" ? extraJobs : channelScoped ? scopedJobs : allJobs;
   const logs = useLogs();
   const feedback = useFeedback();
   const qc = useQueryClient();
@@ -78,10 +85,11 @@ export default function App() {
   const counts = useMemo(() => {
     const jobs = allJobs.data?.jobs ?? [];
     const fb = allJobs.data?.feedback ?? {};
+    const tracked = allJobs.data?.applications ?? {};
     let feed = 0, fresh = 0, saved = 0;
     for (const j of jobs) {
       const v = verdictOf(fb, j);
-      if (v === null) {
+      if (v === null && !tracked[j.job_url]) {
         feed++;
         if (j.is_new) fresh++;
       } else if (v === "like") saved++;
@@ -94,7 +102,8 @@ export default function App() {
     const want = VIEW_VERDICT[view];
     const q = filters.search.trim().toLowerCase();
     const out = (source.data?.jobs ?? []).filter((job) => {
-      if (verdictOf(feedbackMap, job) !== want) return false;
+      if (view !== "archived" && verdictOf(feedbackMap, job) !== want) return false;
+      if ((view === "feed" || view === "new") && source.data?.applications?.[job.job_url]) return false;
       if (view === "new" && !job.is_new) return false;
       if (filters.remoteOnly && !job.is_remote) return false;
       const score = analysisMap[job.job_url]?.relevance_score ?? 0;
@@ -132,14 +141,24 @@ export default function App() {
   };
   const onLike = (job: Job) => setVerdict(job, "like", "Aggiunta ai preferiti");
   const onDismiss = (job: Job) => setVerdict(job, "dislike", "Offerta scartata");
-  const onRestore = (job: Job) =>
+  const onRestore = (job: Job) => {
+    if (view === "archived") {
+      api.restore(job.job_url).then(() => {
+        qc.invalidateQueries({ queryKey: ["jobs"] });
+        qc.invalidateQueries({ queryKey: ["analytics"] });
+        toast.success("Offerta rimessa nel feed");
+      }).catch((err: Error) => toast.error(err.message));
+      return;
+    }
     setVerdict(
       job,
       null,
       verdictOf(feedbackMap, job) === "like" ? "Tolta dai preferiti" : "Rimessa tra le offerte",
     );
 
-  const mode: CardMode = view === "saved" ? "saved" : view === "dismissed" ? "dismissed" : "feed";
+  };
+
+  const mode: CardMode = view === "archived" ? "archived" : view === "applications" ? "applications" : view === "saved" ? "saved" : view === "dismissed" ? "dismissed" : "feed";
   const heading = listView ? HEADINGS[view] : null;
   const hasFilters = !!filters.search || filters.remoteOnly || filters.minScore > 0;
 
@@ -169,6 +188,7 @@ export default function App() {
 
         {view === "analytics" && <AnalyticsPage />}
         {view === "logs" && <LogsPage />}
+        {view === "applications" && <ApplicationsPage onOpen={setSelected} />}
 
         {heading && (
           <>
@@ -238,6 +258,11 @@ function ListEmpty({ view, filtered }: { view: View; filtered: boolean }) {
       </EmptyState>
     );
   }
+  if (view === "archived" || view === "applications") return (
+    <EmptyState icon={<Inbox />} title={view === "archived" ? "Archivio vuoto" : "Nessuna candidatura"}>
+      {view === "applications" ? "Apri un’offerta e salva lo stato della candidatura." : "Qui ritroverai le offerte archiviate automaticamente."}
+    </EmptyState>
+  );
   if (view === "saved")
     return (
       <EmptyState icon={<Heart />} title="Nessun preferito">

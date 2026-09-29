@@ -3,6 +3,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "../api/client";
 import type {
   ChannelRequest,
@@ -51,11 +52,12 @@ export function useLogs(enabled = true) {
 
 // The active job list. `channelId === null` means "all stored jobs" (/jobs);
 // a number scopes to one channel's jobs.
-export function useJobs(channelId: number | null) {
+export function useJobs(channelId: number | null, scope: "active" | "archived" | "applications" = "active") {
   return useQuery({
-    queryKey: ["jobs", channelId],
+    queryKey: ["jobs", channelId, scope],
     queryFn: () =>
-      channelId === null ? api.jobs() : api.channelJobs(channelId),
+      scope === "applications" ? api.applications() : channelId === null ? api.jobs(scope === "archived") : api.channelJobs(channelId),
+    refetchInterval: 60_000,
   });
 }
 
@@ -130,13 +132,13 @@ export function useFeedback() {
       });
       return { snapshot };
     },
-    onError: (_err, _v, ctx) => {
+    onError: (err, _v, ctx) => {
+      toast.error(`Salvataggio non riuscito: ${err.message}`);
       ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
-    // Deliberately no jobs refetch here: the optimistic cache already matches
-    // the server, and an immediate refetch was reverting the UI. Channel
-    // counts only include jobs still to review, so those do need a refresh.
-    onSuccess: () => {
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["job"] });
       qc.invalidateQueries({ queryKey: ["analytics"] });
       qc.invalidateQueries({ queryKey: ["channels"] });
     },

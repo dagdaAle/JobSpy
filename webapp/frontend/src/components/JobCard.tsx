@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Analysis, Job } from "../api/types";
 import { daysLeftInFeed, initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
 
-export type CardMode = "feed" | "saved" | "dismissed";
+export type CardMode = "feed" | "saved" | "dismissed" | "archived" | "applications";
 
 interface Props {
   job: Job;
@@ -25,7 +25,7 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
   const salary = salaryLabel(job);
   const tags = analysis?.tags ?? [];
   const locations = job.location?.split(" · ") ?? [];
-  const daysLeft = mode === "feed" ? daysLeftInFeed(job.first_seen_at, feedDays) : null;
+  const daysLeft = mode === "feed" ? daysLeftInFeed(job.feed_since ?? job.first_seen_at, feedDays) : null;
 
   return (
     <article
@@ -48,7 +48,7 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
 
         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
           {job.is_remote ? (
-            <Meta icon={<Wifi />}>Remoto</Meta>
+            <Meta icon={<Wifi />}>Remoto · {job.location || "Area da verificare"}</Meta>
           ) : (
             locations[0] && (
               <Meta icon={<MapPin />}>
@@ -62,6 +62,11 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
 
         <div className="mt-auto space-y-3">
           {score != null && <ScoreBar score={score} />}
+          {analysis && score == null && <p className="text-xs text-muted-foreground">Match da valutare: dati insufficienti</p>}
+          {analysis?.assessment && <p className="text-xs text-muted-foreground">
+            {analysis.assessment.location_fit === "compatible" ? "Verona / remoto Italia: compatibile secondo l’annuncio"
+              : analysis.assessment.location_fit === "incompatible" ? "Sede o vincoli non compatibili" : "Sede o vincoli da verificare"}
+          </p>}
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {tags.slice(0, 4).map((t) => (
@@ -105,7 +110,7 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
               <Heart className="fill-current" />
             </CardAction>
           )}
-          {mode === "dismissed" && (
+          {(mode === "dismissed" || mode === "archived") && (
             <CardAction label="Rimetti tra le offerte" onClick={onRestore}>
               <Undo2 />
             </CardAction>

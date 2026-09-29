@@ -1,3 +1,4 @@
+import { ApplicationEditor } from "./ApplicationEditor";
 import { ExternalLink, Heart, Sparkles, Undo2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,8 @@ function Body({
   const salary = salaryLabel(job);
   const applyUrl = job.job_url_direct || job.job_url;
   const details = [
-    ["Sede", job.is_remote ? "Remoto" : job.location],
+    ["Sede / area ammessa", job.location || "Da verificare"],
+    ["Modalità", job.is_remote ? "Remoto" : analysis?.assessment?.work_mode === "hybrid" ? "Ibrido" : "Vedi annuncio"],
     ["Retribuzione", salary],
     ["Contratto", job.job_type],
     ["Livello", job.job_level],
@@ -96,9 +98,9 @@ function Body({
           </div>
         </div>
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button render={<a href={applyUrl} target="_blank" rel="noreferrer" />} className="flex-1 sm:flex-none">
-            Candidati <ExternalLink />
-          </Button>
+          {/^(https?):\/\//i.test(applyUrl) && <Button render={<a href={applyUrl} target="_blank" rel="noreferrer" />} className="flex-1 sm:flex-none">
+            Apri annuncio <ExternalLink />
+          </Button>}
           {mode === "feed" && (
             <>
               <Button variant="outline" onClick={() => act(onLike)}>
@@ -114,7 +116,7 @@ function Body({
               <Heart className="fill-current text-rose-500" /> Togli dai preferiti
             </Button>
           )}
-          {mode === "dismissed" && (
+          {(mode === "dismissed" || mode === "archived") && (
             <Button variant="outline" onClick={() => act(onRestore)}>
               <Undo2 /> Rimetti tra le offerte
             </Button>
@@ -136,6 +138,12 @@ function Body({
                   </span>
                 )}
               </div>
+              {score == null && <p className="text-sm">Match non calcolabile con le informazioni disponibili.</p>}
+              {analysis.assessment && <div className="space-y-1 text-sm">
+                <p><strong>Verona o remoto dall’Italia:</strong> {analysis.assessment.location_reason}</p>
+                <p className="text-muted-foreground">Attendibilità della valutazione: {({ high: "alta", medium: "media", low: "bassa" })[analysis.assessment.confidence]}</p>
+                {analysis.assessment.missing_requirements?.length > 0 && <p>Requisiti da verificare: {analysis.assessment.missing_requirements.join("; ")}</p>}
+              </div>}
               {analysis.summary && <p className="text-sm leading-relaxed">{analysis.summary}</p>}
               {analysis.reasons && analysis.reasons.length > 0 && (
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
@@ -180,6 +188,7 @@ function Body({
             </div>
           )}
 
+          <ApplicationEditor key={job.job_url} jobUrl={job.job_url} />
           <Separator />
 
           <section className="space-y-2">

@@ -16,7 +16,9 @@ export interface Job {
   is_new?: boolean;
   // UTC "YYYY-MM-DD HH:MM:SS": when we first scraped it (drives the feed expiry).
   first_seen_at?: string | null;
-  // Copies of the same offer (same title+company) collapsed into this card.
+  feed_since?: string | null;
+  archived_at?: string | null;
+  // Copies with matching content, location and work mode.
   duplicates?: number;
   duplicate_urls?: string[];
   // Rich fields (present on stored/channel jobs).
@@ -37,6 +39,13 @@ export interface Job {
 }
 
 export interface Analysis {
+  assessment?: {
+    work_mode: "remote" | "hybrid" | "onsite" | "unknown";
+    location_fit: "compatible" | "incompatible" | "unknown";
+    location_reason: string;
+    confidence: "high" | "medium" | "low";
+    missing_requirements: string[];
+  };
   relevance_score?: number | null;
   tags?: string[];
   summary?: string;
@@ -89,6 +98,7 @@ export interface ChannelRequest {
 
 // Envelope shared by /search, /jobs and /channels/{id}/jobs.
 export interface JobsResponse {
+  applications?: Record<string, Application>;
   jobs: Job[];
   analysis: Record<string, Analysis>;
   feedback: Record<string, Feedback>;
@@ -185,4 +195,26 @@ export interface LogEntry {
 
 export interface LogsResponse {
   logs: LogEntry[];
+}
+
+export type ApplicationStatus = "to_apply" | "applied" | "contacted" | "interview" | "rejected" | "offer" | "withdrawn";
+export interface Application {
+  cv_label: string;
+  contact: string;
+  updated_at?: string;
+  job_url: string;
+  status: ApplicationStatus;
+  applied_on: string | null;
+  notes: string;
+  next_step: string;
+  follow_up_on: string | null;
+}
+
+export interface ManualApplication extends Application {
+  title: string; company: string; url: string | null; location: string;
+}
+export interface ApplicationEvent {
+  id: number; kind: "created" | "updated" | "imported" | "note";
+  occurred_on: string; created_at: string;
+  content: Record<string, unknown>;
 }
