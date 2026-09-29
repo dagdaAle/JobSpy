@@ -121,6 +121,7 @@ def search_site(
             search_term=search_term,
             results_wanted=results_wanted,
             is_remote=True,
+            hours_old=hours_old,
             **kwargs,
         )
 

@@ -7,6 +7,8 @@ import tailwindcss from "@tailwindcss/vite";
 // running uvicorn server (default :8000). In prod, Vite builds into
 // ../static and FastAPI serves both the SPA and the API from the same origin.
 const API_ROUTES = [
+  "/applications",
+  "/maintenance",
   "/search",
   "/jobs",
   "/channels",

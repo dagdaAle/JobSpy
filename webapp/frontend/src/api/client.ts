@@ -1,4 +1,7 @@
 import type {
+  Application,
+  ApplicationEvent,
+  ManualApplication,
   AnalyticsResponse,
   ChannelRequest,
   ChannelsResponse,
@@ -22,7 +25,7 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body?.detail ?? detail;
+      detail = Array.isArray(body?.detail) ? body.detail.map((e: { msg: string }) => e.msg).join("; ") : body?.detail ?? detail;
     } catch {
       /* ignore */
     }
@@ -48,7 +51,15 @@ export const api = {
 
   analytics: () => req<AnalyticsResponse>("/analytics"),
 
-  jobs: () => req<JobsResponse>("/jobs").then(normJobs),
+  jobs: (archived = false) => req<JobsResponse>(`/jobs?archived=${archived}`).then(normJobs),
+  applications: () => req<JobsResponse>("/applications").then(normJobs),
+  saveApplication: (body: Application) => req<{ ok: boolean }>("/applications", {
+    method: "POST", body: JSON.stringify(body),
+  }),
+  createManualApplication: (body: ManualApplication) => req<{ ok: boolean; job_url: string }>("/applications/manual", { method: "POST", body: JSON.stringify(body) }),
+  applicationHistory: (url: string) => req<{ events: ApplicationEvent[] }>(`/applications/history?url=${encodeURIComponent(url)}`),
+  addApplicationNote: (body: { job_url: string; text: string; occurred_on: string }) => req<{ ok: boolean }>("/applications/notes", { method: "POST", body: JSON.stringify(body) }),
+  restore: (url: string) => req<{ ok: boolean }>(`/jobs/restore?url=${encodeURIComponent(url)}`, { method: "POST" }),
 
   search: (body: SearchRequest) =>
     req<JobsResponse>("/search", {

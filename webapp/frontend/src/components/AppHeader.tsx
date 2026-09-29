@@ -5,13 +5,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import type { StatusResponse } from "../api/types";
 
-export type View = "feed" | "new" | "saved" | "dismissed" | "analytics" | "logs";
+export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "analytics" | "logs";
 
 const NAV: { view: View; label: string }[] = [
   { view: "feed", label: "Offerte" },
   { view: "new", label: "Nuove" },
   { view: "saved", label: "Preferiti" },
   { view: "dismissed", label: "Scartate" },
+  { view: "archived", label: "Archivio" },
+  { view: "applications", label: "Candidature" },
   { view: "analytics", label: "Analytics" },
   { view: "logs", label: "Log" },
 ];

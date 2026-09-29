@@ -21,7 +21,7 @@ const INITIAL = {
   name: "",
   site: "linkedin",
   search_term: "",
-  location: "",
+  location: "Verona, Veneto",
   distance_km: 50,
   results_wanted: 50,
   hours_old: 336,
@@ -57,6 +57,7 @@ export function NewChannelDialog({
     );
   };
 
+  const remoteBoard = ["remotive", "remoteok", "weworkremotely", "workingnomads"].includes(form.site);
   const siteItems = sites.map((s) => ({ value: s, label: siteLabel(s) }));
 
   return (
@@ -94,10 +95,11 @@ export function NewChannelDialog({
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Dove">
+            <Field label={remoteBoard ? "Area candidati (vedi singole offerte)" : "Dove"}>
               <Input
+                disabled={remoteBoard}
                 placeholder="es. Verona, Veneto"
-                value={form.location}
+                value={remoteBoard ? "Remoto: verifica paesi ammessi" : form.location}
                 onChange={(e) => set("location", e.target.value)}
               />
             </Field>
@@ -112,6 +114,8 @@ export function NewChannelDialog({
               <Input
                 type="number"
                 min={1}
+                max={500}
+                disabled={remoteBoard}
                 value={form.distance_km}
                 onChange={(e) => set("distance_km", Number(e.target.value))}
               />
@@ -125,12 +129,20 @@ export function NewChannelDialog({
                 onChange={(e) => set("results_wanted", Number(e.target.value))}
               />
             </Field>
+            <Field label="Annunci degli ultimi giorni (0 = tutti)">
+              <Input type="number" min={0} max={365} value={form.hours_old / 24}
+                onChange={(e) => set("hours_old", Number(e.target.value) * 24)} />
+            </Field>
             <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 sm:col-span-2">
               <span className="text-sm">Solo offerte da remoto</span>
-              <Switch checked={form.is_remote} onCheckedChange={(v) => set("is_remote", v)} />
+              <Switch disabled={remoteBoard} checked={remoteBoard || form.is_remote} onCheckedChange={(v) => set("is_remote", v)} />
             </label>
           </div>
 
+          <p className="text-xs text-muted-foreground">
+            Per Verona lascia “Solo offerte da remoto” disattivato: include presenza e ibrido.
+            Sui siti remoti la sede indica i paesi ammessi; gli annunci senza data restano visibili.
+          </p>
           {create.isError && (
             <p className="text-sm text-destructive">{(create.error as Error).message}</p>
           )}

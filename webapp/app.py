@@ -27,10 +27,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from jobspy.presets import (
     ITALY_EXTRA_SITES,
@@ -154,6 +154,7 @@ def _startup() -> None:
         traceback.print_exc()
 
     # Apply the feed rule right away, then analyze whatever is still missing.
+    storage.configure_analysis(analyzer.MODEL, analyzer.PROMPT_VERSION)
     _archive_stale(trigger="startup")
     _kick_analysis(trigger="startup")
 
@@ -225,9 +226,10 @@ _analysis_running = False
 _analysis_requested = False
 
 
-def _analyze_one(rec: dict[str, Any], cv_text: str, cv_version_id: int | None) -> bool:
+def _analyze_one(rec: dict[str, Any], cv_text: str, cv_version_id: int | None, context_key: str) -> bool:
     """Analyze one job, store the attempt, return True on success."""
     base = {
+        "context_key": context_key,
         "provider": analyzer.PROVIDER,
         "model": analyzer.MODEL,
         "prompt_version": analyzer.PROMPT_VERSION,
@@ -252,7 +254,7 @@ def _analyze_one(rec: dict[str, Any], cv_text: str, cv_version_id: int | None) -
             "latency_ms": out["latency_ms"],
         },
     )
-    storage.set_analysis(rec["job_url"], out["result"])
+    storage.set_analysis(rec["job_url"], out["result"], context_key)
     return True
 
 
@@ -269,14 +271,15 @@ def _analyze_backlog(trigger: str) -> None:
     try:
         cv_text = storage.get_cv_text()
         cv_version_id = storage.current_cv_version_id()
+        context_key = storage.analysis_context()
         seen: set[str] = set()
         while True:
-            batch = [r for r in storage.jobs_pending_analysis(50) if r["job_url"] not in seen]
+            batch = storage.jobs_pending_analysis(50, exclude=seen)
             if not batch:
                 break
             seen.update(r["job_url"] for r in batch)
             with ThreadPoolExecutor(max_workers=_ANALYSIS_WORKERS) as pool:
-                for success in pool.map(lambda r: _analyze_one(r, cv_text, cv_version_id), batch):
+                for success in pool.map(lambda r: _analyze_one(r, cv_text, cv_version_id, context_key), batch):
                     ok += success
                     failed += not success
     except Exception as exc:
@@ -344,8 +347,8 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
                 hours_old=channel.get("hours_old"),
                 is_remote=bool(channel.get("is_remote")),
             )
-        records = _with_raw(df, _FULL_COLUMNS)
-        new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
+            records = _with_raw(df, _FULL_COLUMNS)
+            new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
     except Exception as exc:
         storage.finish_log(log_id, {
             "status": "error", "error": str(exc)[:500],
@@ -435,6 +438,7 @@ def run_search(req: SearchRequest) -> dict[str, Any]:
                 req.search_term,
                 results_wanted=req.results_wanted,
                 sites=req.sites,
+                hours_old=req.hours_old,
             )
         else:
             if not req.location.strip():
@@ -542,6 +546,7 @@ def _jobs_envelope(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     feedback = storage.get_all_feedback()
     analysis = storage.get_all_analysis()
     return {
+        "applications": {u: a for u, a in storage.get_applications().items() if u in urls},
         "count": len(jobs),
         "jobs": jobs,
         "feedback": {u: v for u, v in feedback.items() if u in urls},
@@ -551,13 +556,13 @@ def _jobs_envelope(jobs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @app.get("/jobs")
-def list_jobs() -> dict[str, Any]:
+def list_jobs(archived: bool = False) -> dict[str, Any]:
     """
     Return all previously stored jobs (with feedback + analysis) without
     scraping. Used to repopulate the UI on page load / refresh so we don't
     re-run the scrape and AI analysis every time.
     """
-    return _jobs_envelope(storage.get_all_jobs())
+    return _jobs_envelope(storage.get_all_jobs(archived_only=archived))
 
 
 @app.get("/channels")
@@ -658,14 +663,14 @@ def analytics() -> dict[str, Any]:
 
 
 @app.post("/maintenance/recency")
-def set_recency(hours: int = _RECENCY_DAYS * 24) -> dict[str, Any]:
+def set_recency(hours: int = Query(_RECENCY_DAYS * 24, ge=1)) -> dict[str, Any]:
     """Set the recency window (hours_old) on every channel."""
     changed = storage.set_hours_old_all(hours)
     return {"ok": True, "channels_updated": changed, "hours_old": hours}
 
 
 @app.post("/maintenance/archive")
-def archive(days: int = _FEED_DAYS) -> dict[str, Any]:
+def archive(days: int = Query(_FEED_DAYS, ge=1)) -> dict[str, Any]:
     """Archive jobs left without a verdict for N days (nothing is deleted)."""
     archived = _archive_stale(days)
     return {"ok": True, "archived": archived, "days": days}
@@ -682,6 +687,96 @@ def analyze_backlog() -> dict[str, Any]:
 def logs(limit: int = 200) -> dict[str, Any]:
     """Recent update events (channel refreshes, purges), newest first."""
     return {"logs": storage.list_logs(max(1, min(limit, 1000)))}
+
+
+class ApplicationRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    status: Literal["to_apply", "applied", "contacted", "interview", "rejected", "offer", "withdrawn"]
+    applied_on: datetime.date | None = None
+    notes: str = Field("", max_length=10000)
+    next_step: str = Field("", max_length=2000)
+    follow_up_on: datetime.date | None = None
+    cv_label: str = Field("", max_length=300)
+    contact: str = Field("", max_length=500)
+
+
+class ManualApplicationRequest(ApplicationRequest):
+    job_url: str = ""  # Ignored: server derives identity from url or a UUID.
+    title: str = Field(..., min_length=1, max_length=300)
+    company: str = Field(..., min_length=1, max_length=300)
+    url: HttpUrl | None = None
+    location: str = Field("", max_length=300)
+
+    @field_validator('title', 'company')
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Il campo non può essere vuoto')
+        return value.strip()
+
+
+class ApplicationNoteRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=5000)
+    occurred_on: datetime.date
+
+    @field_validator('text')
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Scrivi un aggiornamento')
+        return value.strip()
+
+
+@app.post("/applications/manual", status_code=201)
+def create_manual_application(req: ManualApplicationRequest) -> dict[str, Any]:
+    data = req.model_dump(mode='json', exclude={'job_url'})
+    try:
+        url = storage.create_manual_application(**data)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'ok': True, 'job_url': url}
+
+
+@app.get("/applications/history")
+def application_history(url: str) -> dict[str, Any]:
+    if url not in storage.get_applications():
+        raise HTTPException(status_code=404, detail='Candidatura non trovata')
+    return {'events': storage.application_events(url)}
+
+
+@app.post("/applications/notes", status_code=201)
+def add_application_note(req: ApplicationNoteRequest) -> dict[str, Any]:
+    try:
+        storage.add_application_note(req.job_url, req.text, req.occurred_on.isoformat())
+    except KeyError:
+        raise HTTPException(status_code=404, detail='Candidatura non trovata')
+    return {'ok': True}
+
+
+@app.get("/applications")
+def applications() -> dict[str, Any]:
+    tracked = storage.get_applications()
+    return _jobs_envelope([j for j in storage.get_all_jobs(include_archived=True)
+                           if j["job_url"] in tracked or any(u in tracked for u in j.get("duplicate_urls", []))])
+
+
+@app.post("/applications")
+def save_application(req: ApplicationRequest) -> dict[str, Any]:
+    data = req.model_dump(mode="json")
+    try:
+        storage.set_application(**data)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    return {"ok": True}
+
+
+@app.post("/jobs/restore")
+def restore_job(url: str) -> dict[str, Any]:
+    if storage.get_job(url) is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    storage.restore_job(url)
+    return {"ok": True}
 
 
 # Serve the SPA. Mounted last so API routes take precedence.

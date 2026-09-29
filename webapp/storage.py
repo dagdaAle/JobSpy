@@ -24,12 +24,14 @@ single SQLite file whose path is configurable via ``FEEDBACK_DB`` (defaults to
 from __future__ import annotations
 
 import datetime
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 import re
 import sqlite3
 import threading
+import uuid
 from typing import Any, Literal
 
 Verdict = Literal["like", "dislike"]
@@ -65,13 +67,19 @@ _LIFECYCLE_COLUMNS = (
     "archived_at",
     "archive_reason",
     "raw_json",
+    "feed_since",
 )
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
     conn = sqlite3.connect(_DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _now() -> str:
@@ -136,6 +144,15 @@ def init_db() -> None:
     if _needs_history_migration():
         path = backup_db("pre-history")
         print(f"[storage] backup before migration: {path}", flush=True)
+    if os.path.exists(_DB_PATH):
+        with _connect() as conn:
+            jobs_exist = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone()
+            migrated = 'feed_since' in {r['name'] for r in conn.execute('PRAGMA table_info(jobs)')}
+            app_columns = {r['name'] for r in conn.execute('PRAGMA table_info(applications)')}
+        if jobs_exist and not migrated:
+            backup_db('pre-workflow-v2')
+        elif app_columns and 'cv_label' not in app_columns:
+            backup_db('pre-application-history')
     with _lock, _connect() as conn:
         conn.execute(
             """
@@ -166,7 +183,7 @@ def init_db() -> None:
             )
             """
         )
-        # DeepSeek analysis, one row per job_url (cache: never re-pay).
+        # Current analysis cache; model, prompt and CV determine validity.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS analysis (
@@ -207,7 +224,7 @@ def init_db() -> None:
             """
         )
         # Association channel <-> job, with per-channel first/last seen so we can
-        # mark "new" jobs (first_seen == last_seen).
+        # mark jobs first discovered in the latest successful refresh.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS channel_jobs (
@@ -335,6 +352,37 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if col not in existing:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_jobs_archived ON jobs(archived_at)")
+    for table, columns in {
+        "channel_jobs": {"is_new": "INTEGER NOT NULL DEFAULT 0"},
+        "analysis": {"context_key": "TEXT", "assessment": "TEXT"},
+        "analysis_runs": {"context_key": "TEXT"},
+    }.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, kind in columns.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    conn.execute("""CREATE TABLE IF NOT EXISTS applications (
+        job_url TEXT PRIMARY KEY, status TEXT NOT NULL,
+        applied_on TEXT, notes TEXT NOT NULL DEFAULT '', next_step TEXT NOT NULL DEFAULT '',
+        follow_up_on TEXT, updated_at TEXT NOT NULL
+    )""")
+
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(applications)")}
+    for column in ("cv_label", "contact"):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE applications ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    conn.execute("""CREATE TABLE IF NOT EXISTS application_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, job_url TEXT NOT NULL,
+        kind TEXT NOT NULL, content TEXT NOT NULL, occurred_on TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_application_events_url ON application_events(job_url, id)")
+    if not conn.execute("SELECT 1 FROM meta WHERE key='application_history_v1'").fetchone():
+        for row in conn.execute("SELECT * FROM applications").fetchall():
+            conn.execute("INSERT INTO application_events(job_url,kind,content,occurred_on,created_at) VALUES (?,?,?,?,?)",
+                         (row['job_url'], 'imported', json.dumps(dict(row), ensure_ascii=False),
+                          row['updated_at'][:10], _now()))
+        conn.execute("INSERT INTO meta VALUES ('application_history_v1', ?)", (_now(),))
 
 
 def _backfill_history(conn: sqlite3.Connection) -> None:
@@ -565,7 +613,7 @@ def upsert_jobs(records: list[dict[str, Any]]) -> None:
         _upsert_jobs_conn(conn, records)
 
 
-def get_all_jobs(include_archived: bool = False) -> list[dict[str, Any]]:
+def get_all_jobs(include_archived: bool = False, archived_only: bool = False) -> list[dict[str, Any]]:
     """
     Return stored jobs as card records, newest first.
 
@@ -579,17 +627,18 @@ def get_all_jobs(include_archived: bool = False) -> list[dict[str, Any]]:
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
                    j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval, j.first_seen_at,
+                   j.salary_currency, j.salary_interval, j.first_seen_at, j.archived_at, j.feed_since,
+                   j.job_url_direct,
                    EXISTS(
                        SELECT 1 FROM channel_jobs cj
                        WHERE cj.job_url = j.job_url
-                         AND cj.first_seen = cj.last_seen
+                         AND cj.is_new = 1
                    ) AS is_new
             FROM jobs j
-            WHERE ? OR j.archived_at IS NULL
+            WHERE (? OR j.archived_at IS NULL) AND (NOT ? OR j.archived_at IS NOT NULL)
             ORDER BY j.date_posted DESC, j.seen_at DESC
             """,
-            (1 if include_archived else 0,),
+            (int(include_archived or archived_only), int(archived_only)),
         ).fetchall()
         return _group_duplicates(conn, [_row_to_card(row) for row in rows])
 
@@ -597,7 +646,7 @@ def get_all_jobs(include_archived: bool = False) -> list[dict[str, Any]]:
 def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
     """Normalise a jobs row into a lightweight card record (no description)."""
     rec = dict(row)
-    rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+    rec["is_remote"] = _is_remote_true(rec.get("is_remote"))
     if "is_new" in rec:
         rec["is_new"] = bool(rec["is_new"])
     return rec
@@ -606,37 +655,37 @@ def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Duplicates                                                                   #
 # --------------------------------------------------------------------------- #
-# Some employers publish the same offer once per region (e.g. seven identical
-# "PLM Developer" posts that differ only by URL and location). Copies are shown
-# as a single card and share the same like/dislike.
+# Only copies with matching content, location and work mode share feedback.
+# A matching title and employer alone must not hide a different opening.
 
 _DASHES = str.maketrans({"\u2013": "-", "\u2014": "-"})
 
 
-def _dup_key(title: Any, company: Any) -> tuple[str, str] | None:
-    """Normalised (title, company) identifying copies of the same offer.
-
-    Returns None when either field is missing: without both we can't tell
-    copies apart, so such jobs are never grouped.
-    """
-    t = " ".join(str(title or "").translate(_DASHES).lower().split())
-    c = " ".join(str(company or "").lower().split())
-    return (t, c) if t and c else None
+def _dup_key(job: Any) -> tuple[str, ...] | None:
+    """Conservative identity: different locations or descriptions stay separate."""
+    norm = lambda v: " ".join(str(v or "").translate(_DASHES).lower().split())
+    title, company = norm(job["title"]), norm(job["company"])
+    description, location = norm(job["description"]), norm(job["location"])
+    # A generic title is insufficient evidence to propagate a rejection.
+    if not title or not company or len(description) < 100 or not location:
+        return None
+    return (title, company, location, str(_is_remote_true(job["is_remote"])),
+            norm(job["job_type"]), hashlib.sha256(description.encode()).hexdigest())
 
 
 def _sibling_rows(conn: sqlite3.Connection, job_url: str) -> list[sqlite3.Row]:
     """Other stored copies of the same offer as ``job_url``."""
     row = conn.execute(
-        "SELECT title, company FROM jobs WHERE job_url = ?", (job_url,)
+        "SELECT * FROM jobs WHERE job_url = ?", (job_url,)
     ).fetchone()
-    key = _dup_key(row["title"], row["company"]) if row else None
+    key = _dup_key(row) if row else None
     if key is None:
         return []
     rows = conn.execute(
-        "SELECT job_url, title, company, site FROM jobs WHERE job_url != ?",
+        "SELECT * FROM jobs WHERE job_url != ?",
         (job_url,),
     ).fetchall()
-    return [r for r in rows if _dup_key(r["title"], r["company"]) == key]
+    return [r for r in rows if _dup_key(r) == key]
 
 
 def _inherit_group_feedback(conn: sqlite3.Connection, urls: list[str]) -> None:
@@ -646,13 +695,13 @@ def _inherit_group_feedback(conn: sqlite3.Connection, urls: list[str]) -> None:
         return
     rows = conn.execute(
         """
-        SELECT j.job_url, j.title, j.company, j.site, f.verdict
+        SELECT j.*, f.verdict
         FROM jobs j LEFT JOIN feedback f ON f.job_url = j.job_url
         """
     ).fetchall()
-    verdicts: dict[tuple[str, str], set[str]] = {}
+    verdicts: dict[tuple[str, ...], set[str]] = {}
     for r in rows:
-        key = _dup_key(r["title"], r["company"])
+        key = _dup_key(r)
         if key and r["verdict"]:
             verdicts.setdefault(key, set()).add(r["verdict"])
     by_url = {r["job_url"]: r for r in rows}
@@ -660,7 +709,7 @@ def _inherit_group_feedback(conn: sqlite3.Connection, urls: list[str]) -> None:
         r = by_url.get(url)
         if r is None or r["verdict"]:
             continue
-        key = _dup_key(r["title"], r["company"])
+        key = _dup_key(r)
         group = verdicts.get(key) if key else None
         if not group:
             continue
@@ -685,10 +734,12 @@ def _group_duplicates(
         for r in conn.execute("SELECT job_url, verdict FROM feedback")
     }
     analyzed = {r["job_url"] for r in conn.execute("SELECT job_url FROM analysis")}
+    tracked = {r[0] for r in conn.execute("SELECT job_url FROM applications")}
+    identities = {r["job_url"]: _dup_key(r) for r in conn.execute("SELECT * FROM jobs")}
     groups: dict[Any, list[tuple[int, dict[str, Any]]]] = {}
     order: list[Any] = []
     for i, card in enumerate(cards):
-        key = _dup_key(card.get("title"), card.get("company")) or ("", card["job_url"])
+        key = ("application", card["job_url"]) if card["job_url"] in tracked else identities.get(card["job_url"]) or ("", card["job_url"])
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -734,7 +785,7 @@ def get_job(job_url: str) -> dict[str, Any] | None:
     if row is None:
         return None
     rec = dict(row)
-    rec["is_remote"] = str(rec.get("is_remote")).lower() == "true"
+    rec["is_remote"] = _is_remote_true(rec.get("is_remote"))
     return rec
 
 
@@ -820,12 +871,13 @@ def list_channels() -> list[dict[str, Any]]:
                 """
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN cj.first_seen = cj.last_seen THEN 1 ELSE 0 END) AS new
+                    SUM(CASE WHEN cj.is_new = 1 THEN 1 ELSE 0 END) AS new
                 FROM channel_jobs cj
                 JOIN jobs j ON j.job_url = cj.job_url
                 WHERE cj.channel_id = ?
                   AND j.archived_at IS NULL
                   AND cj.job_url NOT IN (SELECT job_url FROM feedback)
+                  AND cj.job_url NOT IN (SELECT job_url FROM applications)
                 """,
                 (ch["id"],),
             ).fetchone()
@@ -874,8 +926,9 @@ def archive_stale_jobs(days: int = 7) -> int:
             UPDATE jobs SET archived_at = ?, archive_reason = 'no_verdict'
             WHERE archived_at IS NULL
               AND first_seen_at IS NOT NULL
-              AND first_seen_at < datetime('now', ?)
+              AND COALESCE(feed_since, first_seen_at) < datetime('now', ?)
               AND job_url NOT IN (SELECT job_url FROM feedback)
+              AND job_url NOT IN (SELECT job_url FROM applications)
             """,
             (_now(), f"-{int(days)} days"),
         )
@@ -891,10 +944,9 @@ def upsert_channel_jobs(
     the first time). Existing links have their ``last_seen`` bumped so they are
     no longer flagged as new.
     """
-    if not records:
-        return 0
     new_count = 0
     with _lock, _connect() as conn:
+        conn.execute("UPDATE channel_jobs SET is_new = 0 WHERE channel_id = ?", (channel_id,))
         _upsert_jobs_conn(conn, records, channel_id=channel_id, run_id=run_id)
         for rec in records:
             url = rec.get("job_url")
@@ -915,8 +967,8 @@ def upsert_channel_jobs(
             else:
                 conn.execute(
                     """
-                    INSERT INTO channel_jobs (channel_id, job_url, first_seen, last_seen)
-                    VALUES (?, ?, datetime('now'), datetime('now'))
+                    INSERT INTO channel_jobs (channel_id, job_url, first_seen, last_seen, is_new)
+                    VALUES (?, ?, datetime('now'), datetime('now'), 1)
                     """,
                     (channel_id, url),
                 )
@@ -933,8 +985,9 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
                    j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval, j.first_seen_at,
-                   cj.first_seen, cj.last_seen
+                   j.salary_currency, j.salary_interval, j.first_seen_at, j.archived_at, j.feed_since,
+                   j.job_url_direct,
+                   cj.first_seen, cj.last_seen, cj.is_new
             FROM channel_jobs cj
             JOIN jobs j ON j.job_url = cj.job_url
             WHERE cj.channel_id = ? AND j.archived_at IS NULL
@@ -945,7 +998,6 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
         jobs: list[dict[str, Any]] = []
         for row in rows:
             rec = _row_to_card(row)
-            rec["is_new"] = rec.pop("first_seen") == rec.pop("last_seen")
             jobs.append(rec)
         return _group_duplicates(conn, jobs)
 
@@ -1039,8 +1091,8 @@ def add_analysis_run(job_url: str, run: dict[str, Any]) -> None:
             INSERT INTO analysis_runs
                 (job_url, provider, model, prompt_version, cv_version_id, status,
                  relevance_score, tags, summary, reasons, raw_response,
-                 input_tokens, output_tokens, latency_ms, error, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_tokens, output_tokens, latency_ms, error, created_at, context_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_url, run.get("provider"), run.get("model"), run.get("prompt_version"),
@@ -1050,7 +1102,7 @@ def add_analysis_run(job_url: str, run: dict[str, Any]) -> None:
                 result.get("summary"),
                 json.dumps(result["reasons"], ensure_ascii=False) if "reasons" in result else None,
                 run.get("raw_response"), run.get("input_tokens"), run.get("output_tokens"),
-                run.get("latency_ms"), run.get("error"), _now(),
+                run.get("latency_ms"), run.get("error"), _now(), run.get("context_key"),
             ),
         )
 
@@ -1059,46 +1111,60 @@ def add_analysis_run(job_url: str, run: dict[str, Any]) -> None:
 _MAX_ANALYSIS_FAILURES = 3
 
 
-def jobs_pending_analysis(limit: int = 50) -> list[dict[str, Any]]:
-    """Jobs (archived included) with no current analysis, oldest first.
+def configure_analysis(model: str, prompt_version: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('analysis_config', ?)",
+                     (json.dumps([model, prompt_version]),))
+        _update_analysis_context(conn)
 
-    Skips jobs that already failed ``_MAX_ANALYSIS_FAILURES`` times so a
-    broken posting doesn't get paid for forever.
-    """
+
+def _update_analysis_context(conn: sqlite3.Connection) -> None:
+    config = conn.execute("SELECT value FROM meta WHERE key = 'analysis_config'").fetchone()
+    cv = conn.execute("SELECT text FROM cv WHERE id = 1").fetchone()
+    key = hashlib.sha256(((config[0] if config else '') + '\n' + (cv[0] if cv else '')).encode()).hexdigest()
+    conn.execute("INSERT OR REPLACE INTO meta VALUES ('analysis_context', ?)", (key,))
+
+
+def analysis_context() -> str:
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'analysis_context'").fetchone()
+        return row[0] if row else ''
+
+
+_PENDING_SQL = """
+    FROM jobs j
+    WHERE COALESCE(j.site, '') != 'manual'
+      AND NOT EXISTS (SELECT 1 FROM analysis a WHERE a.job_url = j.job_url
+        AND a.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), ''))
+      AND (SELECT COUNT(*) FROM analysis_runs r WHERE r.job_url = j.job_url
+           AND r.status = 'error'
+           AND r.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '')) < ?
+"""
+
+
+def jobs_pending_analysis(limit: int = 50, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    # Exclude attempts before LIMIT: failing jobs must not starve later batches.
+    excluded = sorted(exclude or [])
+    extra = (' AND j.job_url NOT IN (' + ','.join('?' for _ in excluded) + ')') if excluded else ''
     with _lock, _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT j.job_url, j.title, j.company, j.location, j.is_remote,
-                   j.job_type, j.description
-            FROM jobs j
-            WHERE j.job_url NOT IN (SELECT job_url FROM analysis)
-              AND (SELECT COUNT(*) FROM analysis_runs r
-                   WHERE r.job_url = j.job_url AND r.status = 'error') < ?
-            ORDER BY j.first_seen_at DESC
-            LIMIT ?
-            """,
-            (_MAX_ANALYSIS_FAILURES, limit),
+            'SELECT j.job_url, j.title, j.company, j.location, j.is_remote, j.job_type, j.description '
+            + _PENDING_SQL + extra + ' ORDER BY j.archived_at IS NOT NULL, j.first_seen_at DESC LIMIT ?',
+            (_MAX_ANALYSIS_FAILURES, *excluded, limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def count_pending_analysis() -> int:
     with _lock, _connect() as conn:
-        return conn.execute(
-            """
-            SELECT COUNT(*) FROM jobs j
-            WHERE j.job_url NOT IN (SELECT job_url FROM analysis)
-              AND (SELECT COUNT(*) FROM analysis_runs r
-                   WHERE r.job_url = j.job_url AND r.status = 'error') < ?
-            """,
-            (_MAX_ANALYSIS_FAILURES,),
-        ).fetchone()[0]
+        return conn.execute('SELECT COUNT(*) ' + _PENDING_SQL, (_MAX_ANALYSIS_FAILURES,)).fetchone()[0]
 
 
-def set_analysis(job_url: str, analysis: dict[str, Any]) -> None:
+def set_analysis(job_url: str, analysis: dict[str, Any], context_key: str | None = None) -> None:
     """Store (or replace) the analysis for a job."""
     if not job_url:
         return
+    context_key = analysis_context() if context_key is None else context_key
     tags = json.dumps(analysis.get("tags", []), ensure_ascii=False)
     reasons = json.dumps(analysis.get("reasons", []), ensure_ascii=False)
     summary = analysis.get("summary", "")
@@ -1106,16 +1172,18 @@ def set_analysis(job_url: str, analysis: dict[str, Any]) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO analysis (job_url, tags, summary, relevance_score, reasons, analyzed_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO analysis (job_url, tags, summary, relevance_score, reasons, analyzed_at, context_key, assessment)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?)
             ON CONFLICT(job_url) DO UPDATE SET
+                context_key = excluded.context_key,
+                assessment = excluded.assessment,
                 tags            = excluded.tags,
                 summary         = excluded.summary,
                 relevance_score = excluded.relevance_score,
                 reasons         = excluded.reasons,
                 analyzed_at     = datetime('now')
             """,
-            (job_url, tags, summary, score, reasons),
+            (job_url, tags, summary, score, reasons, context_key, json.dumps(analysis.get("assessment", {}), ensure_ascii=False)),
         )
 
 
@@ -1123,11 +1191,13 @@ def get_all_analysis() -> dict[str, dict[str, Any]]:
     """Return ``{job_url: {tags, summary, relevance_score, reasons}}`` for all analyzed jobs."""
     with _lock, _connect() as conn:
         rows = conn.execute(
-            "SELECT job_url, tags, summary, relevance_score, reasons FROM analysis"
+            "SELECT job_url, tags, summary, relevance_score, reasons, assessment FROM analysis "
+            "WHERE context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '')"
         ).fetchall()
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         result[row["job_url"]] = {
+            "assessment": json.loads(row["assessment"] or "{}"),
             "tags": _loads_list(row["tags"]),
             "summary": row["summary"] or "",
             "relevance_score": row["relevance_score"],
@@ -1185,6 +1255,7 @@ def set_cv_text(text: str) -> None:
             """,
             (text,),
         )
+        _update_analysis_context(conn)
 
 
 def get_cv_text() -> str:
@@ -1251,10 +1322,11 @@ def analytics_summary() -> dict[str, Any]:
         scores = [
             r["relevance_score"]
             for r in conn.execute(
-                "SELECT relevance_score FROM analysis WHERE relevance_score IS NOT NULL"
+                "SELECT relevance_score FROM analysis WHERE relevance_score IS NOT NULL "
+                "AND context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '')"
             ).fetchall()
         ]
-        tag_rows = [r["tags"] for r in conn.execute("SELECT tags FROM analysis").fetchall()]
+        tag_rows = [r["tags"] for r in conn.execute("SELECT tags FROM analysis WHERE context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '')").fetchall()]
         likes = conn.execute(
             "SELECT COUNT(*) AS n FROM feedback WHERE verdict = 'like'"
         ).fetchone()["n"]
@@ -1387,3 +1459,81 @@ def analytics_summary() -> dict[str, Any]:
         "top_industries": _top_counts(industry_counter, 8),
         "remote_by_site": remote_by_site,
     }
+
+
+APPLICATION_STATUSES = {"to_apply", "applied", "contacted", "interview", "rejected", "offer", "withdrawn"}
+
+
+def get_applications() -> dict[str, dict[str, Any]]:
+    with _lock, _connect() as conn:
+        return {r["job_url"]: dict(r) for r in conn.execute("SELECT * FROM applications")}
+
+
+def _set_application_conn(conn: sqlite3.Connection, job_url: str, data: dict[str, Any]) -> None:
+    if data['status'] not in APPLICATION_STATUSES:
+        raise ValueError("Stato candidatura non valido")
+    if not conn.execute("SELECT 1 FROM jobs WHERE job_url=?", (job_url,)).fetchone():
+        raise KeyError(job_url)
+    old = conn.execute("SELECT * FROM applications WHERE job_url=?", (job_url,)).fetchone()
+    changes = {k: {'from': old[k] if old else None, 'to': v}
+               for k, v in data.items() if not old or old[k] != v}
+    if not changes:
+        return
+    columns = list(data)
+    conn.execute(
+        f"INSERT INTO applications(job_url,{','.join(columns)},updated_at) VALUES ({','.join('?' for _ in range(len(columns)+2))}) "
+        f"ON CONFLICT(job_url) DO UPDATE SET {','.join(f'{k}=excluded.{k}' for k in columns)},updated_at=excluded.updated_at",
+        (job_url, *data.values(), _now()),
+    )
+    conn.execute("INSERT INTO application_events(job_url,kind,content,occurred_on,created_at) VALUES (?,?,?,?,?)",
+                 (job_url, 'updated' if old else 'created', json.dumps(changes, ensure_ascii=False), _now()[:10], _now()))
+    conn.execute("UPDATE jobs SET archived_at=NULL, archive_reason=NULL WHERE job_url=?", (job_url,))
+
+
+def set_application(job_url: str, status: str, applied_on: str | None = None,
+                    notes: str = '', next_step: str = '', follow_up_on: str | None = None,
+                    cv_label: str = '', contact: str = '') -> None:
+    with _lock, _connect() as conn:
+        _set_application_conn(conn, job_url, dict(status=status, applied_on=applied_on, notes=notes,
+            next_step=next_step, follow_up_on=follow_up_on, cv_label=cv_label, contact=contact))
+
+
+def create_manual_application(title: str, company: str, url: str | None, location: str,
+                              **data: Any) -> str:
+    """Create the job and tracker atomically; never overwrite an existing application."""
+    job_url = url or f'manual:{uuid.uuid4()}'
+    with _lock, _connect() as conn:
+        if conn.execute("SELECT 1 FROM applications WHERE job_url=?", (job_url,)).fetchone():
+            raise ValueError("Esiste già una candidatura per questo link: aprila dalla lista.")
+        if not conn.execute("SELECT 1 FROM jobs WHERE job_url=?", (job_url,)).fetchone():
+            _upsert_jobs_conn(conn, [dict(job_url=job_url, site='manual', title=title,
+                                        company=company, location=location)])
+        _set_application_conn(conn, job_url, data)
+    return job_url
+
+
+def application_events(job_url: str) -> list[dict[str, Any]]:
+    with _lock, _connect() as conn:
+        rows = conn.execute("SELECT * FROM application_events WHERE job_url=? ORDER BY occurred_on DESC, id DESC",
+                            (job_url,)).fetchall()
+    return [{**dict(row), 'content': json.loads(row['content'])} for row in rows]
+
+
+def add_application_note(job_url: str, text: str, occurred_on: str) -> None:
+    with _lock, _connect() as conn:
+        if not conn.execute("SELECT 1 FROM applications WHERE job_url=?", (job_url,)).fetchone():
+            raise KeyError(job_url)
+        conn.execute("INSERT INTO application_events(job_url,kind,content,occurred_on,created_at) VALUES (?,?,?,?,?)",
+                     (job_url, 'note', json.dumps({'text': text}, ensure_ascii=False), occurred_on, _now()))
+
+
+def restore_job(job_url: str) -> bool:
+    with _lock, _connect() as conn:
+        urls = [job_url, *[row["job_url"] for row in _sibling_rows(conn, job_url)]]
+        changed = False
+        for url in urls:
+            changed |= bool(conn.execute(
+                "UPDATE jobs SET archived_at=NULL, archive_reason=NULL, feed_since=? "
+                "WHERE job_url=? AND archived_at IS NOT NULL", (_now(), url),
+            ).rowcount)
+        return changed
