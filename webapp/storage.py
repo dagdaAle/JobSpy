@@ -361,6 +361,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for col, kind in columns.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    # Pre-migration analyses stay valid ('legacy') instead of being re-paid.
+    # To re-analyse them: UPDATE analysis SET context_key = '' WHERE context_key = 'legacy'
+    conn.execute("UPDATE analysis SET context_key = 'legacy' WHERE context_key IS NULL")
     conn.execute("""CREATE TABLE IF NOT EXISTS applications (
         job_url TEXT PRIMARY KEY, status TEXT NOT NULL,
         applied_on TEXT, notes TEXT NOT NULL DEFAULT '', next_step TEXT NOT NULL DEFAULT '',
@@ -1135,7 +1138,7 @@ _PENDING_SQL = """
     FROM jobs j
     WHERE COALESCE(j.site, '') != 'manual'
       AND NOT EXISTS (SELECT 1 FROM analysis a WHERE a.job_url = j.job_url
-        AND a.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), ''))
+        AND (a.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '') OR a.context_key = 'legacy'))
       AND (SELECT COUNT(*) FROM analysis_runs r WHERE r.job_url = j.job_url
            AND r.status = 'error'
            AND r.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '')) < ?
@@ -1192,7 +1195,7 @@ def get_all_analysis() -> dict[str, dict[str, Any]]:
     with _lock, _connect() as conn:
         rows = conn.execute(
             "SELECT job_url, tags, summary, relevance_score, reasons, assessment FROM analysis "
-            "WHERE context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '')"
+            "WHERE (context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '') OR context_key = 'legacy')"
         ).fetchall()
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -1323,10 +1326,10 @@ def analytics_summary() -> dict[str, Any]:
             r["relevance_score"]
             for r in conn.execute(
                 "SELECT relevance_score FROM analysis WHERE relevance_score IS NOT NULL "
-                "AND context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '')"
+                "AND (context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '') OR context_key = 'legacy')"
             ).fetchall()
         ]
-        tag_rows = [r["tags"] for r in conn.execute("SELECT tags FROM analysis WHERE context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '')").fetchall()]
+        tag_rows = [r["tags"] for r in conn.execute("SELECT tags FROM analysis WHERE context_key = COALESCE((SELECT value FROM meta WHERE key='analysis_context'), '') OR context_key = 'legacy'").fetchall()]
         likes = conn.execute(
             "SELECT COUNT(*) AS n FROM feedback WHERE verdict = 'like'"
         ).fetchone()["n"]
