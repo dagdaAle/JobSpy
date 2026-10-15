@@ -374,6 +374,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for column in ("cv_label", "contact"):
         if column not in existing:
             conn.execute(f"ALTER TABLE applications ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    if "cv_id" not in existing:
+        conn.execute("ALTER TABLE applications ADD COLUMN cv_id INTEGER")
+    # CV library: uploaded base CVs and LLM-tailored variants (Markdown).
+    conn.execute("""CREATE TABLE IF NOT EXISTS cvs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('base', 'tailored')),
+        parent_id INTEGER REFERENCES cvs(id) ON DELETE SET NULL,
+        job_url TEXT, markdown TEXT NOT NULL, changes TEXT NOT NULL DEFAULT '[]',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_cvs_job ON cvs(job_url)")
     conn.execute("""CREATE TABLE IF NOT EXISTS application_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, job_url TEXT NOT NULL,
         kind TEXT NOT NULL, content TEXT NOT NULL, occurred_on TEXT NOT NULL,
@@ -1495,10 +1507,11 @@ def _set_application_conn(conn: sqlite3.Connection, job_url: str, data: dict[str
 
 def set_application(job_url: str, status: str, applied_on: str | None = None,
                     notes: str = '', next_step: str = '', follow_up_on: str | None = None,
-                    cv_label: str = '', contact: str = '') -> None:
+                    cv_label: str = '', contact: str = '', cv_id: int | None = None) -> None:
     with _lock, _connect() as conn:
         _set_application_conn(conn, job_url, dict(status=status, applied_on=applied_on, notes=notes,
-            next_step=next_step, follow_up_on=follow_up_on, cv_label=cv_label, contact=contact))
+            next_step=next_step, follow_up_on=follow_up_on, cv_label=cv_label, contact=contact,
+            cv_id=cv_id))
 
 
 def create_manual_application(title: str, company: str, url: str | None, location: str,
@@ -1540,3 +1553,103 @@ def restore_job(job_url: str) -> bool:
                 "WHERE job_url=? AND archived_at IS NOT NULL", (_now(), url),
             ).rowcount)
         return changed
+
+
+# ---------------------------------------------------------------------------
+# CV library
+# ---------------------------------------------------------------------------
+
+_CV_LIST_COLUMNS = "id, name, kind, parent_id, job_url, is_default, created_at, updated_at, length(markdown) AS chars"
+
+
+def _cv_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    out = dict(row)
+    out["is_default"] = bool(out["is_default"])
+    if "changes" in out:
+        out["changes"] = json.loads(out["changes"] or "[]")
+    return out
+
+
+def list_cvs() -> list[dict[str, Any]]:
+    """All CVs without their body, defaults and base CVs first."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(f"SELECT {_CV_LIST_COLUMNS} FROM cvs "
+                            "ORDER BY is_default DESC, kind, updated_at DESC").fetchall()
+    return [_cv_row(r) for r in rows]
+
+
+def get_cv(cv_id: int) -> dict[str, Any] | None:
+    with _lock, _connect() as conn:
+        return _cv_row(conn.execute("SELECT * FROM cvs WHERE id = ?", (cv_id,)).fetchone())
+
+
+def _sync_default_conn(conn: sqlite3.Connection) -> None:
+    """The default CV is the one analyses score against (``cv`` row id=1)."""
+    row = conn.execute("SELECT markdown FROM cvs WHERE is_default = 1").fetchone()
+    if row and row["markdown"].strip():
+        _cv_version_conn(conn, row["markdown"])
+        conn.execute("INSERT INTO cv (id, text, updated_at) VALUES (1, ?, datetime('now')) "
+                     "ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at",
+                     (row["markdown"],))
+        _update_analysis_context(conn)
+
+
+def create_cv(name: str, markdown: str, kind: str = "base", parent_id: int | None = None,
+              job_url: str | None = None, changes: list[str] | None = None) -> int:
+    """Store a CV; the first base CV becomes the default automatically."""
+    now = _now()
+    with _lock, _connect() as conn:
+        first = kind == "base" and not conn.execute(
+            "SELECT 1 FROM cvs WHERE is_default = 1").fetchone()
+        cur = conn.execute(
+            "INSERT INTO cvs (name, kind, parent_id, job_url, markdown, changes, is_default, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, kind, parent_id, job_url, markdown, json.dumps(changes or [], ensure_ascii=False),
+             int(first), now, now))
+        if first:
+            _sync_default_conn(conn)
+        return int(cur.lastrowid)
+
+
+def update_cv(cv_id: int, name: str | None = None, markdown: str | None = None) -> None:
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT is_default FROM cvs WHERE id = ?", (cv_id,)).fetchone()
+        if row is None:
+            raise KeyError(cv_id)
+        conn.execute("UPDATE cvs SET name = COALESCE(?, name), markdown = COALESCE(?, markdown), "
+                     "updated_at = ? WHERE id = ?", (name, markdown, _now(), cv_id))
+        if row["is_default"] and markdown is not None:
+            _sync_default_conn(conn)
+
+
+def set_default_cv(cv_id: int) -> None:
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT kind FROM cvs WHERE id = ?", (cv_id,)).fetchone()
+        if row is None:
+            raise KeyError(cv_id)
+        if row["kind"] != "base":
+            raise ValueError("Solo un CV base può essere usato per l'analisi")
+        conn.execute("UPDATE cvs SET is_default = (id = ?)", (cv_id,))
+        _sync_default_conn(conn)
+
+
+def delete_cv(cv_id: int) -> None:
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT is_default FROM cvs WHERE id = ?", (cv_id,)).fetchone()
+        if row is None:
+            raise KeyError(cv_id)
+        if row["is_default"]:
+            raise ValueError("Non puoi eliminare il CV predefinito: scegline prima un altro")
+        conn.execute("UPDATE applications SET cv_id = NULL WHERE cv_id = ?", (cv_id,))
+        conn.execute("UPDATE cvs SET parent_id = NULL WHERE parent_id = ?", (cv_id,))
+        conn.execute("DELETE FROM cvs WHERE id = ?", (cv_id,))
+
+
+def seed_cv_from_text(text: str) -> None:
+    """At startup: import the mounted PDF as first base CV if the library is empty."""
+    with _lock, _connect() as conn:
+        if conn.execute("SELECT 1 FROM cvs").fetchone():
+            return
+    create_cv("CV principale", text)

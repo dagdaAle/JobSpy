@@ -27,8 +27,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -42,6 +42,7 @@ from jobspy.presets import (
 )
 
 import analyzer
+import cv_render
 import storage
 
 app = FastAPI(title="JobSpy Web", version="2.0.0")
@@ -146,9 +147,11 @@ def _startup() -> None:
     # Re-read the mounted CV at every start: a changed PDF becomes a new CV
     # version (older analyses stay linked to the CV they were made with).
     try:
+        # The mounted PDF only seeds an empty CV library; afterwards the
+        # default CV chosen in the UI drives the analyses.
         cv_text = analyzer.extract_pdf_text()
         if cv_text:
-            storage.set_cv_text(cv_text)
+            storage.seed_cv_from_text(cv_text)
     except Exception:
         # CV is optional; never block startup on parsing issues.
         traceback.print_exc()
@@ -698,6 +701,7 @@ class ApplicationRequest(BaseModel):
     follow_up_on: datetime.date | None = None
     cv_label: str = Field("", max_length=300)
     contact: str = Field("", max_length=500)
+    cv_id: int | None = None
 
 
 class ManualApplicationRequest(ApplicationRequest):
@@ -777,6 +781,135 @@ def restore_job(url: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Offerta non trovata")
     storage.restore_job(url)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CV library
+# ---------------------------------------------------------------------------
+
+_MAX_CV_UPLOAD = 5 * 1024 * 1024
+
+
+class CvCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    markdown: str = Field(..., min_length=1, max_length=50000)
+
+
+class CvUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    markdown: str | None = Field(None, min_length=1, max_length=50000)
+
+
+class CvTailorRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    base_cv_id: int | None = None  # None -> default CV
+
+
+def _cv_or_404(cv_id: int) -> dict[str, Any]:
+    cv = storage.get_cv(cv_id)
+    if cv is None:
+        raise HTTPException(status_code=404, detail="CV non trovato")
+    return cv
+
+
+@app.get("/cvs")
+def list_cvs() -> dict[str, Any]:
+    return {"cvs": storage.list_cvs()}
+
+
+@app.get("/cvs/{cv_id}")
+def get_cv(cv_id: int) -> dict[str, Any]:
+    return {"cv": _cv_or_404(cv_id)}
+
+
+@app.post("/cvs", status_code=201)
+def create_cv(req: CvCreateRequest) -> dict[str, Any]:
+    return {"id": storage.create_cv(req.name.strip(), req.markdown)}
+
+
+@app.post("/cvs/upload", status_code=201)
+async def upload_cv(request: Request, name: str = Query(..., min_length=1, max_length=200)) -> dict[str, Any]:
+    """Raw PDF body (Content-Type: application/pdf) -> text -> new base CV."""
+    body = await request.body()
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Carica un file PDF")
+    if len(body) > _MAX_CV_UPLOAD:
+        raise HTTPException(status_code=413, detail="PDF troppo grande (max 5 MB)")
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+        tmp.write(body)
+        tmp.flush()
+        try:
+            text = analyzer.extract_pdf_text(tmp.name)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="PDF illeggibile") from exc
+    if not text:
+        raise HTTPException(status_code=400, detail="Nessun testo nel PDF (è una scansione?)")
+    return {"id": storage.create_cv(name.strip(), text)}
+
+
+@app.patch("/cvs/{cv_id}")
+def update_cv(cv_id: int, req: CvUpdateRequest) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    storage.update_cv(cv_id, req.name.strip() if req.name else None, req.markdown)
+    if storage.get_cv(cv_id)["is_default"] and req.markdown is not None:
+        _kick_analysis(trigger="cv")
+    return {"ok": True}
+
+
+@app.post("/cvs/{cv_id}/default")
+def set_default_cv(cv_id: int) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    try:
+        storage.set_default_cv(cv_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _kick_analysis(trigger="cv")
+    return {"ok": True}
+
+
+@app.delete("/cvs/{cv_id}")
+def delete_cv(cv_id: int) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    try:
+        storage.delete_cv(cv_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/cvs/{cv_id}/pdf")
+def cv_pdf(cv_id: int) -> Response:
+    cv = _cv_or_404(cv_id)
+    pdf = cv_render.markdown_to_pdf(cv["markdown"])
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in cv["name"])[:80] or "cv"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{safe}.pdf"'})
+
+
+@app.post("/cvs/tailor", status_code=201)
+def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
+    """Generate a CV adapted to one job with the LLM, stored as a 'tailored' CV."""
+    job = storage.get_job(req.job_url)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    if req.base_cv_id is not None:
+        base = _cv_or_404(req.base_cv_id)
+    else:
+        default = next((c for c in storage.list_cvs() if c["is_default"]), None)
+        if default is None:
+            raise HTTPException(status_code=400, detail="Nessun CV caricato")
+        base = storage.get_cv(default["id"])
+    try:
+        out = analyzer.tailor_cv(job, base["markdown"])
+    except analyzer.AnalyzerNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    name = f"{base['name']} → {job.get('company') or ''} {job.get('title') or ''}".strip()[:200]
+    cv_id = storage.create_cv(name, out["markdown"], kind="tailored", parent_id=base["id"],
+                              job_url=req.job_url, changes=out["changes"])
+    return {"cv": storage.get_cv(cv_id)}
 
 
 # Serve the SPA. Mounted last so API routes take precedence.

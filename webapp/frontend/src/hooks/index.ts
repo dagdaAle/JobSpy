@@ -144,3 +144,11 @@ export function useFeedback() {
     },
   });
 }
+
+export function useCvs() {
+  return useQuery({ queryKey: ["cvs"], queryFn: api.cvs });
+}
+
+export function useCv(id: number | null) {
+  return useQuery({ queryKey: ["cv", id], queryFn: () => api.cv(id as number), enabled: id !== null });
+}

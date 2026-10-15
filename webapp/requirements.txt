@@ -7,6 +7,10 @@ openpyxl==3.1.5
 openai==1.59.6
 pdfplumber==0.11.4
 
+# CV module: Markdown -> PDF export
+markdown==3.7
+xhtml2pdf==0.2.16
+
 # JobSpy library dependencies (installed from the local ../jobspy package)
 requests>=2.31.0
 beautifulsoup4>=4.12.2

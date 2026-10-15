@@ -16,9 +16,9 @@ export function dateLabel(value?: string | null) {
 }
 export const emptyApplication = (jobUrl: string): Application => ({
   job_url: jobUrl, status: "to_apply", applied_on: null, follow_up_on: null,
-  notes: "", next_step: "", contact: "", cv_label: "",
+  notes: "", next_step: "", contact: "", cv_label: "", cv_id: null,
 });
 export const FIELD_LABELS: Record<string, string> = {
   status: "Stato", applied_on: "Data invio", notes: "Note", next_step: "Prossimo passo",
-  follow_up_on: "Data prossimo passo", contact: "Contatto", cv_label: "CV utilizzato",
+  follow_up_on: "Data prossimo passo", contact: "Contatto", cv_label: "CV utilizzato", cv_id: "CV collegato",
 };

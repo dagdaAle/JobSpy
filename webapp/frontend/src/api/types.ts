@@ -200,6 +200,7 @@ export interface LogsResponse {
 export type ApplicationStatus = "to_apply" | "applied" | "contacted" | "interview" | "rejected" | "offer" | "withdrawn";
 export interface Application {
   cv_label: string;
+  cv_id?: number | null;
   contact: string;
   updated_at?: string;
   job_url: string;
@@ -217,4 +218,20 @@ export interface ApplicationEvent {
   id: number; kind: "created" | "updated" | "imported" | "note";
   occurred_on: string; created_at: string;
   content: Record<string, unknown>;
+}
+
+export interface CvSummary {
+  id: number;
+  name: string;
+  kind: "base" | "tailored";
+  parent_id: number | null;
+  job_url: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  chars: number;
+}
+export interface Cv extends Omit<CvSummary, "chars"> {
+  markdown: string;
+  changes: string[];
 }
