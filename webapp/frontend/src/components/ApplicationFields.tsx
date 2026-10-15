@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Application, ApplicationStatus } from "../api/types";
 import { STATUS_ITEMS } from "../lib/applications";
+import { CvSelect } from "./CvPage";
 
 export function ApplicationFields({ value, onChange }: { value: Application; onChange: (value: Application) => void }) {
   const id = useId();
@@ -29,7 +30,8 @@ export function ApplicationFields({ value, onChange }: { value: Application; onC
     </div>
     {textField("next_step", "Prossimo passo", "text", 2000)}
     {textField("contact", "Contatto / recruiter")}
-    {textField("cv_label", "CV utilizzato (nome o versione)", "text", 300)}
+    <CvSelect value={value.cv_id ?? null} onChange={(cv_id) => onChange({ ...value, cv_id })} />
+    {!value.cv_id && value.cv_label && textField("cv_label", "CV utilizzato (nota storica)", "text", 300)}
     <div className="grid gap-2">
       <Label htmlFor={`${id}-notes`}>Note</Label>
       <Textarea id={`${id}-notes`} maxLength={10000} value={value.notes} onChange={(e) => onChange({ ...value, notes: e.target.value })} />

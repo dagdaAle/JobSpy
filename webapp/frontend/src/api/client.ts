@@ -5,6 +5,8 @@ import type {
   AnalyticsResponse,
   ChannelRequest,
   ChannelsResponse,
+  Cv,
+  CvSummary,
   JobsResponse,
   JobDetailResponse,
   LogsResponse,
@@ -102,4 +104,18 @@ export const api = {
   logs: (limit = 300) => req<LogsResponse>(`/logs?limit=${limit}`),
 
   exportUrl: (format: "csv" | "xlsx") => `/export?format=${format}`,
+
+  cvs: () => req<{ cvs: CvSummary[] }>("/cvs"),
+  cv: (id: number) => req<{ cv: Cv }>(`/cvs/${id}`),
+  createCv: (body: { name: string; markdown: string }) => req<{ id: number }>("/cvs", { method: "POST", body: JSON.stringify(body) }),
+  uploadCv: (name: string, file: File) => req<{ id: number }>(`/cvs/upload?name=${encodeURIComponent(name)}`, {
+    method: "POST", body: file, headers: { "Content-Type": "application/pdf" },
+  }),
+  updateCv: (id: number, body: { name?: string; markdown?: string }) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  setDefaultCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}/default`, { method: "POST" }),
+  deleteCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "DELETE" }),
+  tailorCv: (jobUrl: string, baseCvId?: number) => req<{ cv: Cv }>("/cvs/tailor", {
+    method: "POST", body: JSON.stringify({ job_url: jobUrl, base_cv_id: baseCvId ?? null }),
+  }),
+  cvPdfUrl: (id: number) => `/cvs/${id}/pdf`,
 };

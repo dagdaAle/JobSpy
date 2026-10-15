@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir --no-deps /src
 COPY webapp/app.py /app/app.py
 COPY webapp/storage.py /app/storage.py
 COPY webapp/analyzer.py /app/analyzer.py
+COPY webapp/cv_render.py /app/cv_render.py
 COPY --from=frontend /static /app/static
 
 # Feedback DB lives here (mounted as a volume in docker-compose).

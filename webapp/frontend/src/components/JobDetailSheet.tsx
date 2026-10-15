@@ -1,4 +1,5 @@
 import { ApplicationEditor } from "./ApplicationEditor";
+import { JobCvSection } from "./CvPage";
 import { ExternalLink, Heart, Sparkles, Undo2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -189,6 +190,7 @@ function Body({
           )}
 
           <ApplicationEditor key={job.job_url} jobUrl={job.job_url} />
+          <JobCvSection key={`cv-${job.job_url}`} jobUrl={job.job_url} />
           <Separator />
 
           <section className="space-y-2">
