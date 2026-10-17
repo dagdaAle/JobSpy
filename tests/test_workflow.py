@@ -212,7 +212,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([j.job_url for j in result.jobs], ['https://example.com/new'])
         self.assertIn('non specificata', result.jobs[0].location.country)
 
-    def test_application_history_is_atomic_and_ignores_noop_saves(self):
+    @patch.object(storage, '_now', return_value='2026-09-29 12:00:00')
+    def test_application_history_is_atomic_and_ignores_noop_saves(self, _clock):
         storage.upsert_jobs([job()])
         url = job()['job_url']
         storage.set_application(url, 'applied', applied_on='2026-09-29', cv_label='CV Python v2', contact='Recruiter')

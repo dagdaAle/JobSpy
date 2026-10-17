@@ -43,6 +43,7 @@ from jobspy.presets import (
 
 import analyzer
 import cv_render
+import cv_review
 import storage
 
 app = FastAPI(title="JobSpy Web", version="2.0.0")
@@ -805,6 +806,22 @@ class CvTailorRequest(BaseModel):
     base_cv_id: int | None = None  # None -> default CV
 
 
+class CvReviewRequest(BaseModel):
+    confirmed_facts: str = Field("", max_length=3000)
+    job_url: str | None = Field(None, max_length=3000)
+
+
+class CvPatch(BaseModel):
+    before: str = Field(..., min_length=1, max_length=500)
+    after: str = Field(..., min_length=1, max_length=750)
+    reason: str = Field("Correzione selezionata", max_length=600)
+
+
+class CvRevisionRequest(BaseModel):
+    source_hash: str = Field(..., min_length=64, max_length=64)
+    patches: list[CvPatch] = Field(..., min_length=1, max_length=6)
+
+
 def _cv_or_404(cv_id: int) -> dict[str, Any]:
     cv = storage.get_cv(cv_id)
     if cv is None:
@@ -885,6 +902,49 @@ def cv_pdf(cv_id: int) -> Response:
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in cv["name"])[:80] or "cv"
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{safe}.pdf"'})
+
+
+@app.post("/cvs/{cv_id}/review")
+def review_cv(cv_id: int, req: CvReviewRequest) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    job = storage.get_job(req.job_url) if req.job_url else None
+    if req.job_url and job is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    try:
+        return analyzer.review_cv(cv["markdown"], req.confirmed_facts, job)
+    except analyzer.AnalyzerNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Revisione non disponibile: riprova") from exc
+
+
+@app.post("/cvs/{cv_id}/revision", status_code=201)
+def save_cv_revision(cv_id: int, req: CvRevisionRequest) -> dict[str, Any]:
+    source = _cv_or_404(cv_id)
+    if req.source_hash != cv_review.source_hash(source["markdown"]):
+        raise HTTPException(status_code=409, detail="Il CV è cambiato: esegui di nuovo la revisione")
+    patches = [p.model_dump() for p in req.patches]
+    try:
+        markdown = cv_review.apply_patches(source["markdown"], patches)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(markdown) > 50000:
+        raise HTTPException(status_code=422, detail="CV troppo lungo")
+    new_id = storage.create_cv((source["name"][:180] + " · revisione"), markdown,
+                               kind=source["kind"], parent_id=cv_id, job_url=source["job_url"],
+                               changes=[p["reason"] for p in patches])
+    return {"cv": storage.get_cv(new_id)}
+
+
+@app.post("/cvs/{cv_id}/check")
+def check_cv_pdf(cv_id: int) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    try:
+        return cv_render.check_pdf(cv["markdown"])
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Impossibile verificare il PDF esportato") from exc
 
 
 @app.post("/cvs/tailor", status_code=201)
