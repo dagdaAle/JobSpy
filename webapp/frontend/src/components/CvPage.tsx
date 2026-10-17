@@ -12,16 +12,17 @@ import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import type { CvSummary } from "../api/types";
 import { useCv, useCvs } from "../hooks";
+import { CvReviewPanel } from "./CvReviewPanel";
 
 // Invalidate everything a CV change can touch: the library, the analyses
 // (default CV drives the scoring) and the AI status in the header.
 function useRefreshCvs() {
   const qc = useQueryClient();
-  return () => {
-    qc.invalidateQueries({ queryKey: ["cvs"] });
-    qc.invalidateQueries({ queryKey: ["cv"] });
-    qc.invalidateQueries({ queryKey: ["status"] });
-  };
+  return () => Promise.all([
+    qc.invalidateQueries({ queryKey: ["cvs"] }),
+    qc.invalidateQueries({ queryKey: ["cv"] }),
+    qc.invalidateQueries({ queryKey: ["status"] }),
+  ]);
 }
 
 export function CvPage() {
@@ -45,14 +46,14 @@ export function CvPage() {
           Il CV predefinito (stella) è quello usato per calcolare il match. I CV adattati si generano dal dettaglio di un'offerta.
         </p>
       </div>
-      <NewCv onCreated={(id) => { refresh(); setSelected(id); }} />
+      <NewCv onCreated={(id) => { void refresh().then(() => setSelected(id)); }} />
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <div className="space-y-4">
           <CvList title="CV base" items={base} selected={selected} onSelect={setSelected} />
           <CvList title="Adattati alle offerte" items={tailored} selected={selected} onSelect={setSelected} />
           {cvs.isSuccess && !list.length && <p className="text-sm text-muted-foreground">Nessun CV: caricane uno in PDF.</p>}
         </div>
-        {selected !== null && <CvEditor key={selected} id={selected} />}
+        {selected !== null && <CvEditor key={selected} id={selected} onRevisionCreated={setSelected} />}
       </div>
     </div>
   );
@@ -97,11 +98,12 @@ function NewCv({ onCreated }: { onCreated: (id: number) => void }) {
       <Button variant="outline" disabled={busy} onClick={() => run(api.createCv({ name: "Nuovo CV", markdown: "# Nome Cognome\n\n## Esperienze\n\n- \n" }), "CV creato")}>
         <Plus /> Nuovo da Markdown
       </Button>
+      <p className="w-full text-xs text-muted-foreground">L’importazione conserva il testo del PDF. L’esportazione usa l’impaginazione di JobSpy.</p>
     </div>
   );
 }
 
-export function CvEditor({ id, compact = false }: { id: number; compact?: boolean }) {
+export function CvEditor({ id, compact = false, jobUrl, onRevisionCreated }: { id: number; compact?: boolean; jobUrl?: string; onRevisionCreated?: (id: number) => void }) {
   const cv = useCv(id);
   const refresh = useRefreshCvs();
   const fid = useId();
@@ -168,6 +170,9 @@ export function CvEditor({ id, compact = false }: { id: number; compact?: boolea
         )}
       </div>
       {dirty && <p className="text-xs text-muted-foreground">Modifiche non salvate: il PDF usa l'ultima versione salvata.</p>}
+      <CvReviewPanel key={id} id={id} source={data.markdown} dirty={dirty} jobUrl={jobUrl} onCreated={(newId) => {
+        toast.success("Copia revisionata salvata"); void refresh().then(() => onRevisionCreated?.(newId));
+      }} />
     </div>
   );
 }
@@ -195,6 +200,11 @@ export function JobCvSection({ jobUrl }: { jobUrl: string }) {
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-medium">CV per questa offerta</h3>
+      {base.length > 0 && <details className="rounded-lg border p-3">
+        <summary className="cursor-pointer text-sm font-medium">Revisiona il CV base con poche correzioni</summary>
+        <div className="mt-3"><CvEditor key={chosen} id={Number(chosen)} compact jobUrl={jobUrl}
+          onRevisionCreated={(id) => setBaseId(String(id))} /></div>
+      </details>}
       {base.length === 0 ? (
         <p className="text-sm text-muted-foreground">Carica prima un CV dalla pagina CV.</p>
       ) : (
@@ -217,7 +227,7 @@ export function JobCvSection({ jobUrl }: { jobUrl: string }) {
             <span className="flex-1 truncate">{c.name}</span>
             <span className="text-xs text-muted-foreground">{open === c.id ? "Chiudi" : "Apri"}</span>
           </button>
-          {open === c.id && <div className="mt-3"><CvEditor id={c.id} compact /></div>}
+          {open === c.id && <div className="mt-3"><CvEditor id={c.id} compact jobUrl={jobUrl} onRevisionCreated={setOpen} /></div>}
         </div>
       ))}
     </section>

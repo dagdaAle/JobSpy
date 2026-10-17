@@ -235,3 +235,24 @@ export interface Cv extends Omit<CvSummary, "chars"> {
   markdown: string;
   changes: string[];
 }
+
+export interface CvPatch {
+  before: string;
+  after: string;
+  reason: string;
+}
+
+export interface CvReview {
+  source_hash: string;
+  patches: CvPatch[];
+  observations: string[];
+  questions: string[];
+}
+
+export interface CvPdfCheck {
+  pages: number;
+  chars: number;
+  text: string;
+  warnings: string[];
+  scope: string;
+}

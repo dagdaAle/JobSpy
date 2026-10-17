@@ -7,6 +7,9 @@ import type {
   ChannelsResponse,
   Cv,
   CvSummary,
+  CvReview,
+  CvPatch,
+  CvPdfCheck,
   JobsResponse,
   JobDetailResponse,
   LogsResponse,
@@ -118,4 +121,11 @@ export const api = {
     method: "POST", body: JSON.stringify({ job_url: jobUrl, base_cv_id: baseCvId ?? null }),
   }),
   cvPdfUrl: (id: number) => `/cvs/${id}/pdf`,
+  reviewCv: (id: number, confirmedFacts: string, jobUrl?: string) => req<CvReview>(`/cvs/${id}/review`, {
+    method: "POST", body: JSON.stringify({ confirmed_facts: confirmedFacts, job_url: jobUrl ?? null }),
+  }),
+  reviseCv: (id: number, sourceHash: string, patches: CvPatch[]) => req<{ cv: Cv }>(`/cvs/${id}/revision`, {
+    method: "POST", body: JSON.stringify({ source_hash: sourceHash, patches }),
+  }),
+  checkCvPdf: (id: number) => req<CvPdfCheck>(`/cvs/${id}/check`, { method: "POST" }),
 };
