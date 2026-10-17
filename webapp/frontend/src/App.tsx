@@ -44,7 +44,7 @@ const HEADINGS: Record<"feed" | "new" | "saved" | "dismissed" | "archived" | "ap
 const verdictOf = (fb: Record<string, Feedback>, job: Job) => fb[job.job_url]?.verdict ?? null;
 
 export default function App() {
-  const [view, setView] = useState<View>("feed");
+  const [view, setView] = useState<View>(() => /^\d+$/.test(new URLSearchParams(window.location.search).get("cv") ?? "") ? "cvs" : "feed");
   const [activeChannelId, setActiveChannelId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Job | null>(null);
   const [filters, setFilters] = useState<Filters>({

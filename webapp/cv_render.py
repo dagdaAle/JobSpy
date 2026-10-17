@@ -1,45 +1,48 @@
-"""Markdown CV -> PDF, pure Python (xhtml2pdf) so the slim image needs no system libs."""
+"""CV PDF export and local text extraction checks."""
 
 from __future__ import annotations
 
 import io
 import re
 
-import markdown as md
-from xhtml2pdf import pisa
+from cv_template import to_pdf
 
-_CSS = """
-@page { size: A4; margin: 1.6cm 1.8cm; }
-body { font-family: Helvetica; font-size: 10pt; line-height: 1.35; color: #222; }
-h1 { font-size: 20pt; margin: 0 0 4pt 0; }
-h2 { font-size: 12pt; color: #1f4e79; border-bottom: 1px solid #1f4e79;
-     margin: 12pt 0 4pt 0; padding-bottom: 1pt; }
-h3 { font-size: 10.5pt; margin: 8pt 0 2pt 0; }
-p { margin: 2pt 0; }
-ul { margin: 2pt 0 2pt 0; padding-left: 14pt; }
-li { margin: 0 0 1pt 0; }
-a { color: #1f4e79; }
-"""
+def markdown_to_pdf(text: str, template: str = "europass") -> bytes:
+    return to_pdf(text, template)
 
 
-def markdown_to_pdf(text: str) -> bytes:
-    # Imported PDFs contain plain extracted lines rather than Markdown blocks.
-    # Preserve those line breaks instead of exporting one run-on paragraph.
-    body = md.markdown(text, extensions=["extra", "sane_lists", "nl2br"])
-    html = f"<html><head><meta charset='utf-8'><style>{_CSS}</style></head><body>{body}</body></html>"
-    out = io.BytesIO()
-    result = pisa.CreatePDF(html, dest=out, encoding="utf-8")
-    if result.err:
-        raise RuntimeError("Generazione PDF fallita")
-    return out.getvalue()
+def preview_info(text: str, template: str) -> dict:
+    from pypdf import PdfReader
+    return {"pages": len(PdfReader(io.BytesIO(markdown_to_pdf(text, template))).pages)}
 
 
-def check_pdf(text: str) -> dict:
+def preview_page(text: str, template: str, page_number: int) -> bytes:
+    import pypdfium2
+    pdf = pypdfium2.PdfDocument(markdown_to_pdf(text, template))
+    try:
+        if not 1 <= page_number <= len(pdf):
+            raise IndexError("Pagina non trovata")
+        page = pdf[page_number - 1]
+        try:
+            bitmap = page.render(scale=1.4)
+            try:
+                out = io.BytesIO()
+                bitmap.to_pil().save(out, format="PNG")
+                return out.getvalue()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+
+
+def check_pdf(text: str, template: str = "europass") -> dict:
     """Inspect the actual export, independently of the language model."""
-    import pdfplumber
-    with pdfplumber.open(io.BytesIO(markdown_to_pdf(text))) as pdf:
-        extracted = "\n\n".join(page.extract_text() or "" for page in pdf.pages)
-        pages = len(pdf.pages)
+    from pypdf import PdfReader
+    pdf = PdfReader(io.BytesIO(markdown_to_pdf(text, template)))
+    extracted = "\n\n".join(page.extract_text() or "" for page in pdf.pages)
+    pages = len(pdf.pages)
     warnings = []
     if not extracted.strip():
         warnings.append("Il PDF esportato non contiene testo estraibile")

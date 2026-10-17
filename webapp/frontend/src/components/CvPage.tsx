@@ -13,6 +13,7 @@ import { api } from "../api/client";
 import type { CvSummary } from "../api/types";
 import { useCv, useCvs } from "../hooks";
 import { CvReviewPanel } from "./CvReviewPanel";
+import { CvPdfPreview } from "./CvPdfPreview";
 
 // Invalidate everything a CV change can touch: the library, the analyses
 // (default CV drives the scoring) and the AI status in the header.
@@ -28,7 +29,10 @@ function useRefreshCvs() {
 export function CvPage() {
   const cvs = useCvs();
   const refresh = useRefreshCvs();
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get("cv"));
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  });
   const list = cvs.data?.cvs ?? [];
   const base = list.filter((c) => c.kind === "base");
   const tailored = list.filter((c) => c.kind === "tailored");
@@ -110,19 +114,22 @@ export function CvEditor({ id, compact = false, jobUrl, onRevisionCreated }: { i
   const [name, setName] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [saving, setSaving] = useState(false);
+  const [template, setTemplate] = useState<"europass" | "classic">("europass");
+  const [showPreview, setShowPreview] = useState(!compact);
 
   useEffect(() => {
-    if (cv.data) { setName(cv.data.cv.name); setMarkdown(cv.data.cv.markdown); }
+    if (cv.data) { setName(cv.data.cv.name); setMarkdown(cv.data.cv.markdown); setTemplate(cv.data.cv.template); }
   }, [cv.data]);
 
   if (!cv.data) return <div className="text-sm text-muted-foreground">Caricamento…</div>;
   const data = cv.data.cv;
-  const dirty = name !== data.name || markdown !== data.markdown;
+  const dirty = name !== data.name || markdown !== data.markdown || template !== data.template;
 
   const save = () => {
     setSaving(true);
-    api.updateCv(id, { name, markdown })
-      .then(() => { toast.success(data.is_default ? "Salvato: le offerte verranno rianalizzate" : "CV salvato"); refresh(); })
+    const textChanged = markdown !== data.markdown;
+    api.updateCv(id, { name, markdown: textChanged ? markdown : undefined, template })
+      .then(() => { toast.success(data.is_default && textChanged ? "Salvato: le offerte verranno rianalizzate" : "CV e impaginazione salvati"); refresh(); })
       .catch((e: Error) => toast.error(e.message))
       .finally(() => setSaving(false));
   };
@@ -148,9 +155,30 @@ export function CvEditor({ id, compact = false, jobUrl, onRevisionCreated }: { i
           </ul>
         </div>
       )}
-      <Textarea aria-label="Testo del CV in Markdown" value={markdown} maxLength={50000}
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-muted/20 p-3">
+        <div className="grid gap-1.5">
+          <Label htmlFor={`${fid}-template`}>Stile del PDF</Label>
+          <Select items={[{ value: "europass", label: "Stile Europass · due colonne" }, { value: "classic", label: "Classico · una colonna" }]}
+            value={template} onValueChange={(v) => v && setTemplate(v as "europass" | "classic")}>
+            <SelectTrigger id={`${fid}-template`} className="w-72"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="europass">Stile Europass · due colonne</SelectItem>
+              <SelectItem value="classic">Classico · una colonna</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" onClick={() => setShowPreview((v) => !v)}>{showPreview ? "Nascondi anteprima" : "Mostra anteprima PDF"}</Button>
+        <Button disabled={!dirty || saving || !markdown.trim() || !name.trim()} onClick={save}>Salva e aggiorna anteprima</Button>
+        <p className="w-full text-xs text-muted-foreground">Sezioni, date e competenze vengono impaginate nel template scelto, mantenuto anche nelle copie e nei CV adattati.</p>
+        {dirty && <p className="w-full text-xs text-muted-foreground">Salva per aggiornare il PDF e l’anteprima qui sotto.</p>}
+      </div>
+      {showPreview && <CvPdfPreview id={id} version={`${data.updated_at}-${data.template}`} />}
+      <details className="rounded-lg border p-3">
+        <summary className="cursor-pointer text-sm font-medium">Modifica il testo del CV</summary>
+        <Textarea aria-label="Testo del CV in Markdown" value={markdown} maxLength={50000}
         onChange={(e) => setMarkdown(e.target.value)}
-        className={cn("font-mono text-xs", compact ? "min-h-72" : "min-h-[60vh]")} />
+        className={cn("mt-3 font-mono text-xs", compact ? "min-h-72" : "min-h-[50vh]")} />
+      </details>
       <div className="flex flex-wrap gap-2">
         <Button disabled={!dirty || saving || !markdown.trim() || !name.trim()} onClick={save}>
           {saving && <Loader2 className="animate-spin" />} Salva

@@ -799,6 +799,7 @@ class CvCreateRequest(BaseModel):
 class CvUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=200)
     markdown: str | None = Field(None, min_length=1, max_length=50000)
+    template: Literal["europass", "classic"] | None = None
 
 
 class CvTailorRequest(BaseModel):
@@ -868,7 +869,7 @@ async def upload_cv(request: Request, name: str = Query(..., min_length=1, max_l
 @app.patch("/cvs/{cv_id}")
 def update_cv(cv_id: int, req: CvUpdateRequest) -> dict[str, Any]:
     _cv_or_404(cv_id)
-    storage.update_cv(cv_id, req.name.strip() if req.name else None, req.markdown)
+    storage.update_cv(cv_id, req.name.strip() if req.name else None, req.markdown, req.template)
     if storage.get_cv(cv_id)["is_default"] and req.markdown is not None:
         _kick_analysis(trigger="cv")
     return {"ok": True}
@@ -898,7 +899,7 @@ def delete_cv(cv_id: int) -> dict[str, Any]:
 @app.get("/cvs/{cv_id}/pdf")
 def cv_pdf(cv_id: int) -> Response:
     cv = _cv_or_404(cv_id)
-    pdf = cv_render.markdown_to_pdf(cv["markdown"])
+    pdf = cv_render.markdown_to_pdf(cv["markdown"], cv["template"])
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in cv["name"])[:80] or "cv"
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{safe}.pdf"'})
@@ -920,6 +921,27 @@ def review_cv(cv_id: int, req: CvReviewRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="Revisione non disponibile: riprova") from exc
 
 
+@app.get("/cvs/{cv_id}/preview")
+def cv_preview_info(cv_id: int) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    try:
+        return cv_render.preview_info(cv["markdown"], cv["template"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/cvs/{cv_id}/preview/{page_number}")
+def cv_preview_page(cv_id: int, page_number: int) -> Response:
+    cv = _cv_or_404(cv_id)
+    try:
+        image = cv_render.preview_page(cv["markdown"], cv["template"], page_number)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="Pagina non trovata") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(image, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/cvs/{cv_id}/revision", status_code=201)
 def save_cv_revision(cv_id: int, req: CvRevisionRequest) -> dict[str, Any]:
     source = _cv_or_404(cv_id)
@@ -934,7 +956,7 @@ def save_cv_revision(cv_id: int, req: CvRevisionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="CV troppo lungo")
     new_id = storage.create_cv((source["name"][:180] + " · revisione"), markdown,
                                kind=source["kind"], parent_id=cv_id, job_url=source["job_url"],
-                               changes=[p["reason"] for p in patches])
+                               changes=[p["reason"] for p in patches], template=source["template"])
     return {"cv": storage.get_cv(new_id)}
 
 
@@ -942,7 +964,7 @@ def save_cv_revision(cv_id: int, req: CvRevisionRequest) -> dict[str, Any]:
 def check_cv_pdf(cv_id: int) -> dict[str, Any]:
     cv = _cv_or_404(cv_id)
     try:
-        return cv_render.check_pdf(cv["markdown"])
+        return cv_render.check_pdf(cv["markdown"], cv["template"])
     except Exception as exc:
         raise HTTPException(status_code=422, detail="Impossibile verificare il PDF esportato") from exc
 
@@ -968,7 +990,7 @@ def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     name = f"{base['name']} → {job.get('company') or ''} {job.get('title') or ''}".strip()[:200]
     cv_id = storage.create_cv(name, out["markdown"], kind="tailored", parent_id=base["id"],
-                              job_url=req.job_url, changes=out["changes"])
+                              job_url=req.job_url, changes=out["changes"], template=base["template"])
     return {"cv": storage.get_cv(cv_id)}
 
 

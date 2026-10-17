@@ -386,6 +386,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_cvs_job ON cvs(job_url)")
+    if "template" not in {r["name"] for r in conn.execute("PRAGMA table_info(cvs)")}:
+        conn.execute("ALTER TABLE cvs ADD COLUMN template TEXT NOT NULL DEFAULT 'europass'")
     conn.execute("""CREATE TABLE IF NOT EXISTS application_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, job_url TEXT NOT NULL,
         kind TEXT NOT NULL, content TEXT NOT NULL, occurred_on TEXT NOT NULL,
@@ -1559,7 +1561,7 @@ def restore_job(job_url: str) -> bool:
 # CV library
 # ---------------------------------------------------------------------------
 
-_CV_LIST_COLUMNS = "id, name, kind, parent_id, job_url, is_default, created_at, updated_at, length(markdown) AS chars"
+_CV_LIST_COLUMNS = "id, name, kind, parent_id, job_url, is_default, template, created_at, updated_at, length(markdown) AS chars"
 
 
 def _cv_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -1597,29 +1599,33 @@ def _sync_default_conn(conn: sqlite3.Connection) -> None:
 
 
 def create_cv(name: str, markdown: str, kind: str = "base", parent_id: int | None = None,
-              job_url: str | None = None, changes: list[str] | None = None) -> int:
+              job_url: str | None = None, changes: list[str] | None = None, template: str = "europass") -> int:
     """Store a CV; the first base CV becomes the default automatically."""
     now = _now()
+    if template not in {"europass", "classic"}:
+        raise ValueError("Template CV non valido")
     with _lock, _connect() as conn:
         first = kind == "base" and not conn.execute(
             "SELECT 1 FROM cvs WHERE is_default = 1").fetchone()
         cur = conn.execute(
-            "INSERT INTO cvs (name, kind, parent_id, job_url, markdown, changes, is_default, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cvs (name, kind, parent_id, job_url, markdown, changes, is_default, created_at, updated_at, template) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (name, kind, parent_id, job_url, markdown, json.dumps(changes or [], ensure_ascii=False),
-             int(first), now, now))
+             int(first), now, now, template))
         if first:
             _sync_default_conn(conn)
         return int(cur.lastrowid)
 
 
-def update_cv(cv_id: int, name: str | None = None, markdown: str | None = None) -> None:
+def update_cv(cv_id: int, name: str | None = None, markdown: str | None = None, template: str | None = None) -> None:
+    if template is not None and template not in {"europass", "classic"}:
+        raise ValueError("Template CV non valido")
     with _lock, _connect() as conn:
         row = conn.execute("SELECT is_default FROM cvs WHERE id = ?", (cv_id,)).fetchone()
         if row is None:
             raise KeyError(cv_id)
         conn.execute("UPDATE cvs SET name = COALESCE(?, name), markdown = COALESCE(?, markdown), "
-                     "updated_at = ? WHERE id = ?", (name, markdown, _now(), cv_id))
+                     "template = COALESCE(?, template), updated_at = ? WHERE id = ?", (name, markdown, template, _now(), cv_id))
         if row["is_default"] and markdown is not None:
             _sync_default_conn(conn)
 
