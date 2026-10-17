@@ -230,6 +230,7 @@ export interface CvSummary {
   created_at: string;
   updated_at: string;
   chars: number;
+  template: "europass" | "classic";
 }
 export interface Cv extends Omit<CvSummary, "chars"> {
   markdown: string;

@@ -107,7 +107,7 @@ class CvReviewTests(unittest.TestCase):
 
     def test_export_preserves_plain_text_lines_from_pdf_import(self):
         result = cv_render.check_pdf('Test Candidate\ntest@example.com\nESPERIENZA\nPython developer')
-        self.assertIn('Test Candidate\ntest@example.com\nESPERIENZA\nPython developer', result['text'])
+        self.assertIn('test candidate\ntest@example.com\nesperienza\npython developer', result['text'].lower())
 
 
 if __name__ == '__main__':

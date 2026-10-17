@@ -114,13 +114,14 @@ export const api = {
   uploadCv: (name: string, file: File) => req<{ id: number }>(`/cvs/upload?name=${encodeURIComponent(name)}`, {
     method: "POST", body: file, headers: { "Content-Type": "application/pdf" },
   }),
-  updateCv: (id: number, body: { name?: string; markdown?: string }) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  updateCv: (id: number, body: { name?: string; markdown?: string; template?: "europass" | "classic" }) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   setDefaultCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}/default`, { method: "POST" }),
   deleteCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "DELETE" }),
   tailorCv: (jobUrl: string, baseCvId?: number) => req<{ cv: Cv }>("/cvs/tailor", {
     method: "POST", body: JSON.stringify({ job_url: jobUrl, base_cv_id: baseCvId ?? null }),
   }),
   cvPdfUrl: (id: number) => `/cvs/${id}/pdf`,
+  cvPreviewInfo: (id: number) => req<{ pages: number }>(`/cvs/${id}/preview`),
   reviewCv: (id: number, confirmedFacts: string, jobUrl?: string) => req<CvReview>(`/cvs/${id}/review`, {
     method: "POST", body: JSON.stringify({ confirmed_facts: confirmedFacts, job_url: jobUrl ?? null }),
   }),

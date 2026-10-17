@@ -76,11 +76,12 @@ def extract_pdf_text(path: str | None = None) -> str:
         return ""
 
     import pdfplumber
+    from cv_import import page_text
 
     parts: list[str] = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
+            text = page_text(page)
             if text:
                 parts.append(text)
     full = "\n".join(parts).strip()
