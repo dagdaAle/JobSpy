@@ -42,7 +42,9 @@ class Section:
 
 
 def plain(text):
-    return re.sub(r"[*_`]", "", text).strip()
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?<!\w)[*_]([^*_]+)[*_](?!\w)", r"\1", text)
+    return re.sub(r"`([^`]+)`", r"\1", text).strip()
 
 
 def parse(text):
