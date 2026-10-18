@@ -146,3 +146,10 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(image.headers['content-type'], 'image/png')
         self.assertTrue(image.content.startswith(b'\x89PNG'))
         self.assertEqual(self.client.get(f'/cvs/{cid}/preview/999').status_code, 404)
+
+    def test_contact_underscores_and_markdown_headers_preserve_literal_data(self):
+        source = '# **Demo Candidate**\n\nfirst_last@example.com\n\n## Profilo\n\nPython'
+        for template in ['europass', 'classic']:
+            result = cv_render.check_pdf(source, template)
+            self.assertIn('first_last@example.com', result['text'])
+            self.assertIn('Demo Candidate', result['text'])
