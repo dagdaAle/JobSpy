@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { Analysis, Job } from "../api/types";
 import { useJobDetail } from "../hooks";
-import { parseSkills, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
+import { parseSkills, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo, DECISION_LABEL, REMOTE_SCOPE_LABEL, SENIORITY_LABEL } from "../lib/format";
 import { CompanyAvatar, type CardMode } from "./JobCard";
 
 interface Props {
@@ -75,7 +75,11 @@ function Body({
   const details = [
     ["Sede / area ammessa", job.location || "Da verificare"],
     ["Modalità", job.is_remote ? "Remoto" : analysis?.assessment?.work_mode === "hybrid" ? "Ibrido" : "Vedi annuncio"],
-    ["Retribuzione", salary],
+    ["Area remota", REMOTE_SCOPE_LABEL[analysis?.assessment?.remote_scope ?? ""]],
+    ["Retribuzione", salary || analysis?.assessment?.salary],
+    ["Seniority", SENIORITY_LABEL[analysis?.assessment?.seniority ?? ""]],
+    ["Stack", analysis?.assessment?.stack?.join(", ")],
+    ["Lingue", analysis?.assessment?.languages?.join(", ")],
     ["Contratto", job.job_type],
     ["Livello", job.job_level],
     ["Settore", job.company_industry],
@@ -139,13 +143,24 @@ function Body({
                   </span>
                 )}
               </div>
+              {analysis.assessment?.decision && (
+                <span className={cn("inline-block rounded px-2 py-0.5 text-sm font-medium", DECISION_LABEL[analysis.assessment.decision].className)}>
+                  {DECISION_LABEL[analysis.assessment.decision].text}
+                </span>
+              )}
+              {analysis.summary && <p className="text-sm leading-relaxed">{analysis.summary}</p>}
               {score == null && <p className="text-sm">Match non calcolabile con le informazioni disponibili.</p>}
               {analysis.assessment && <div className="space-y-1 text-sm">
-                <p><strong>Verona o remoto dall’Italia:</strong> {analysis.assessment.location_reason}</p>
+                {(analysis.assessment.blockers?.length ?? 0) > 0 && (
+                  <p className="text-destructive"><strong>Bloccanti:</strong> {analysis.assessment.blockers!.join("; ")}</p>
+                )}
+                {(analysis.assessment.cv_match?.length ?? 0) > 0 && (
+                  <p><strong>Dal tuo CV:</strong> {analysis.assessment.cv_match!.join("; ")}</p>
+                )}
+                {analysis.assessment.missing_requirements?.length > 0 && <p><strong>Ti manca o da verificare:</strong> {analysis.assessment.missing_requirements.join("; ")}</p>}
+                <p><strong>Sede/remoto:</strong> {analysis.assessment.location_reason}</p>
                 <p className="text-muted-foreground">Attendibilità della valutazione: {({ high: "alta", medium: "media", low: "bassa" })[analysis.assessment.confidence]}</p>
-                {analysis.assessment.missing_requirements?.length > 0 && <p>Requisiti da verificare: {analysis.assessment.missing_requirements.join("; ")}</p>}
               </div>}
-              {analysis.summary && <p className="text-sm leading-relaxed">{analysis.summary}</p>}
               {analysis.reasons && analysis.reasons.length > 0 && (
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
                   {analysis.reasons.map((r, i) => (

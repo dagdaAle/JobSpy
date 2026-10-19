@@ -92,6 +92,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  updateChannel: (id: number, body: Partial<ChannelRequest>) =>
+    req<{ channel: unknown }>(`/channels/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   deleteChannel: (id: number) =>
     req<{ ok: boolean; id: number }>(`/channels/${id}`, { method: "DELETE" }),
 

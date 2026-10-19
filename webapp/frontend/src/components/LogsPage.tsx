@@ -179,6 +179,7 @@ function Outcome({ log: l }: { log: LogEntry }) {
           : [
           `${l.new_count} nuove`,
           `${l.found} trovate`,
+          l.removed ? `${l.removed} filtrate` : null,
           l.analyzed ? `${l.analyzed} analizzate` : null,
           l.analysis_failed ? `${l.analysis_failed} analisi fallite` : null,
         ].filter(Boolean);

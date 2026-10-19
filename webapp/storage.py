@@ -354,6 +354,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS ix_jobs_archived ON jobs(archived_at)")
     for table, columns in {
         "channel_jobs": {"is_new": "INTEGER NOT NULL DEFAULT 0"},
+        "channels": {
+            "include_keywords": "TEXT NOT NULL DEFAULT '[]'",
+            "exclude_keywords": "TEXT NOT NULL DEFAULT '[]'",
+            "exclude_companies": "TEXT NOT NULL DEFAULT '[]'",
+            "work_mode": "TEXT NOT NULL DEFAULT 'any'",
+        },
         "analysis": {"context_key": "TEXT", "assessment": "TEXT"},
         "analysis_runs": {"context_key": "TEXT"},
     }.items():
@@ -819,7 +825,23 @@ _CHANNEL_FIELDS = (
     "results_wanted",
     "hours_old",
     "is_remote",
+    "include_keywords",
+    "exclude_keywords",
+    "exclude_companies",
+    "work_mode",
 )
+# Post-scrape filters (see channel_filters.py), stored as JSON lists.
+_CHANNEL_LIST_FIELDS = ("include_keywords", "exclude_keywords", "exclude_companies")
+
+
+def _channel_values(fields: dict[str, Any]) -> dict[str, Any]:
+    values = {k: v for k, v in fields.items() if k in _CHANNEL_FIELDS}
+    if "is_remote" in values:
+        values["is_remote"] = 1 if values["is_remote"] else 0
+    for key in _CHANNEL_LIST_FIELDS:
+        if key in values:
+            values[key] = json.dumps([w.strip() for w in values[key] or [] if w and w.strip()], ensure_ascii=False)
+    return values
 
 
 def create_channel(
@@ -832,26 +854,23 @@ def create_channel(
     results_wanted: int = 25,
     hours_old: int | None = None,
     is_remote: bool = False,
+    include_keywords: list[str] | None = None,
+    exclude_keywords: list[str] | None = None,
+    exclude_companies: list[str] | None = None,
+    work_mode: str = "any",
 ) -> int:
     """Create a channel and return its new id."""
+    values = _channel_values({
+        "name": name or f"{site}: {search_term}", "site": site, "search_term": search_term,
+        "location": location, "distance_km": distance_km, "results_wanted": results_wanted,
+        "hours_old": hours_old, "is_remote": is_remote,
+        "include_keywords": include_keywords, "exclude_keywords": exclude_keywords,
+        "exclude_companies": exclude_companies, "work_mode": work_mode,
+    })
     with _lock, _connect() as conn:
         cur = conn.execute(
-            """
-            INSERT INTO channels
-                (name, site, search_term, location, distance_km,
-                 results_wanted, hours_old, is_remote)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                name or f"{site}: {search_term}",
-                site,
-                search_term,
-                location,
-                distance_km,
-                results_wanted,
-                hours_old,
-                1 if is_remote else 0,
-            ),
+            f"INSERT INTO channels ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+            tuple(values.values()),
         )
         return int(cur.lastrowid)
 
@@ -859,6 +878,9 @@ def create_channel(
 def _channel_from_row(row: sqlite3.Row) -> dict[str, Any]:
     rec = dict(row)
     rec["is_remote"] = bool(rec.get("is_remote"))
+    for key in _CHANNEL_LIST_FIELDS:
+        rec[key] = _loads_list(rec.get(key))
+    rec["work_mode"] = rec.get("work_mode") or "any"
     return rec
 
 
@@ -920,11 +942,7 @@ def update_channel(channel_id: int, fields: dict[str, Any]) -> dict[str, Any] | 
     Jobs already linked to the channel are kept; the new filters apply from
     the next refresh.
     """
-    allowed = {"name", "site", "search_term", "location", "distance_km",
-               "results_wanted", "hours_old", "is_remote"}
-    values = {k: v for k, v in fields.items() if k in allowed}
-    if "is_remote" in values:
-        values["is_remote"] = 1 if values["is_remote"] else 0
+    values = _channel_values(fields)
     with _lock, _connect() as conn:
         if values:
             sets = ", ".join(f"{k} = ?" for k in values)
@@ -1172,9 +1190,16 @@ def analysis_context() -> str:
         return row[0] if row else ''
 
 
+# Inactive = archived or disliked. They are never (re-)analysed, so a prompt
+# or CV change only pays for the jobs still in play; their last analysis stays
+# visible whatever its context.
+_INACTIVE_SQL = """(SELECT job_url FROM jobs WHERE archived_at IS NOT NULL
+    UNION SELECT job_url FROM feedback WHERE verdict = 'dislike')"""
+
 _PENDING_SQL = """
     FROM jobs j
     WHERE COALESCE(j.site, '') != 'manual'
+      AND j.job_url NOT IN """ + _INACTIVE_SQL + """
       AND NOT EXISTS (SELECT 1 FROM analysis a WHERE a.job_url = j.job_url
         AND (a.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '') OR a.context_key = 'legacy'))
       AND (SELECT COUNT(*) FROM analysis_runs r WHERE r.job_url = j.job_url
@@ -1234,6 +1259,7 @@ def get_all_analysis() -> dict[str, dict[str, Any]]:
         rows = conn.execute(
             "SELECT job_url, tags, summary, relevance_score, reasons, assessment FROM analysis "
             "WHERE (context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '') OR context_key = 'legacy')"
+            " OR job_url IN " + _INACTIVE_SQL
         ).fetchall()
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
