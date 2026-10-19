@@ -141,6 +141,18 @@ class ChannelRequest(BaseModel):
     is_remote: bool = False
 
 
+class ChannelUpdate(BaseModel):
+    """Partial update: only the fields sent are changed."""
+    site: str | None = Field(None, min_length=1)
+    search_term: str | None = Field(None, min_length=1)
+    name: str | None = None
+    location: str | None = None
+    distance_km: int | None = Field(None, ge=1, le=500)
+    results_wanted: int | None = Field(None, ge=1, le=500)
+    hours_old: int | None = Field(None, ge=1)
+    is_remote: bool | None = None
+
+
 @app.on_event("startup")
 def _startup() -> None:
     storage.init_db()
@@ -605,6 +617,21 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
         "channel": storage.get_channel(channel_id),
         "new_count": new_count,
     }
+
+
+@app.put("/channels/{channel_id}")
+def update_channel(channel_id: int, req: ChannelUpdate) -> dict[str, Any]:
+    """Change a channel's name/filters. The new filters apply from the next refresh."""
+    if storage.get_channel(channel_id) is None:
+        raise HTTPException(status_code=404, detail="Canale non trovato.")
+    fields = req.model_dump(exclude_unset=True)
+    # hours_old may be cleared with null; the other fields may not.
+    fields = {k: v for k, v in fields.items() if v is not None or k == "hours_old"}
+    if "site" in fields:
+        fields["site"] = fields["site"].strip().lower()
+        if fields["site"] not in _ALL_SITES:
+            raise HTTPException(status_code=422, detail=f"Sito non supportato: {fields['site']}")
+    return {"channel": storage.update_channel(channel_id, fields)}
 
 
 @app.delete("/channels/{channel_id}")
