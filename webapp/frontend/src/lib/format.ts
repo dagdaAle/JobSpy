@@ -130,3 +130,24 @@ export function siteDot(site: string | null | undefined): string {
 export function initial(name: string | null | undefined): string {
   return (name ?? "?").trim().charAt(0).toUpperCase() || "?";
 }
+
+// AI verdict on "should I apply?" (analysis v3).
+export const DECISION_LABEL = {
+  apply: { text: "Candidati", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
+  maybe: { text: "Da valutare", className: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
+  skip: { text: "Lascia perdere", className: "bg-rose-500/15 text-rose-700 dark:text-rose-300" },
+} as const;
+
+export const REMOTE_SCOPE_LABEL: Record<string, string> = {
+  italy: "Remoto dall’Italia",
+  eu: "Remoto UE",
+  worldwide: "Remoto ovunque",
+  restricted: "Remoto solo da altri paesi",
+};
+
+export const SENIORITY_LABEL: Record<string, string> = {
+  junior: "Junior",
+  mid: "Mid",
+  senior: "Senior",
+  lead: "Lead",
+};

@@ -24,13 +24,13 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator
 
 from jobspy.presets import (
     ITALY_EXTRA_SITES,
@@ -42,6 +42,7 @@ from jobspy.presets import (
 )
 
 import analyzer
+import channel_filters
 import cv_render
 import cv_review
 import storage
@@ -130,6 +131,10 @@ class FeedbackRequest(BaseModel):
 _ALL_SITES = ITALY_LOCAL_SITES + ITALY_EXTRA_SITES + REMOTE_ONLY_SITES
 
 
+Keyword = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+WorkMode = Literal["any", "remote", "remote_or_hybrid"]
+
+
 class ChannelRequest(BaseModel):
     site: str = Field(..., min_length=1)
     search_term: str = Field(..., min_length=1)
@@ -139,6 +144,10 @@ class ChannelRequest(BaseModel):
     results_wanted: int = Field(25, ge=1, le=500)
     hours_old: int | None = Field(None, ge=1)
     is_remote: bool = False
+    include_keywords: list[Keyword] = Field(default_factory=list, max_length=30)
+    exclude_keywords: list[Keyword] = Field(default_factory=list, max_length=30)
+    exclude_companies: list[Keyword] = Field(default_factory=list, max_length=30)
+    work_mode: WorkMode = "any"
 
 
 class ChannelUpdate(BaseModel):
@@ -151,6 +160,10 @@ class ChannelUpdate(BaseModel):
     results_wanted: int | None = Field(None, ge=1, le=500)
     hours_old: int | None = Field(None, ge=1)
     is_remote: bool | None = None
+    include_keywords: list[Keyword] | None = Field(None, max_length=30)
+    exclude_keywords: list[Keyword] | None = Field(None, max_length=30)
+    exclude_companies: list[Keyword] | None = Field(None, max_length=30)
+    work_mode: WorkMode | None = None
 
 
 @app.on_event("startup")
@@ -364,6 +377,7 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
                 is_remote=bool(channel.get("is_remote")),
             )
             records = _with_raw(df, _FULL_COLUMNS)
+            records, removed = channel_filters.filter_records(records, channel)
             new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
     except Exception as exc:
         storage.finish_log(log_id, {
@@ -372,7 +386,7 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
         })
         raise
     storage.finish_log(log_id, {
-        "status": "ok", "found": len(records), "new_count": new_count,
+        "status": "ok", "found": len(records) + removed, "new_count": new_count, "removed": removed,
         "duration_ms": int((time.monotonic() - t0) * 1000),
     })
     return new_count
@@ -603,6 +617,10 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
         results_wanted=req.results_wanted,
         hours_old=req.hours_old,
         is_remote=req.is_remote,
+        include_keywords=req.include_keywords,
+        exclude_keywords=req.exclude_keywords,
+        exclude_companies=req.exclude_companies,
+        work_mode=req.work_mode,
     )
     channel = storage.get_channel(channel_id)
     try:

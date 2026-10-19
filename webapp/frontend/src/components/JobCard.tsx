@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Analysis, Job } from "../api/types";
-import { daysLeftInFeed, initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo } from "../lib/format";
+import { daysLeftInFeed, initial, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo, DECISION_LABEL } from "../lib/format";
 
 export type CardMode = "feed" | "saved" | "dismissed" | "archived" | "applications";
 
@@ -63,6 +63,16 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
         <div className="mt-auto space-y-3">
           {score != null && <ScoreBar score={score} />}
           {analysis && score == null && <p className="text-xs text-muted-foreground">Match da valutare: dati insufficienti</p>}
+          {analysis?.assessment?.decision && (
+            <p className="flex items-center gap-2 text-xs">
+              <span className={`rounded px-1.5 py-0.5 font-medium ${DECISION_LABEL[analysis.assessment.decision].className}`}>
+                {DECISION_LABEL[analysis.assessment.decision].text}
+              </span>
+              {analysis.assessment.blockers?.[0] && (
+                <span className="truncate text-muted-foreground">{analysis.assessment.blockers[0]}</span>
+              )}
+            </p>
+          )}
           {analysis?.assessment && <p className="text-xs text-muted-foreground">
             {analysis.assessment.location_fit === "compatible" ? "Verona / remoto Italia: compatibile secondo l’annuncio"
               : analysis.assessment.location_fit === "incompatible" ? "Sede o vincoli non compatibili" : "Sede o vincoli da verificare"}

@@ -84,6 +84,16 @@ export function useCreateChannel() {
   });
 }
 
+export function useUpdateChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Partial<ChannelRequest> }) => api.updateChannel(id, body),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["channels"] });
+    },
+  });
+}
+
 export function useDeleteChannel() {
   const qc = useQueryClient();
   return useMutation({
