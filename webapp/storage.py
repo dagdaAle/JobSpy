@@ -914,6 +914,30 @@ def list_channels() -> list[dict[str, Any]]:
     return channels
 
 
+def update_channel(channel_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+    """Update the given channel fields and return the channel, or None if missing.
+
+    Jobs already linked to the channel are kept; the new filters apply from
+    the next refresh.
+    """
+    allowed = {"name", "site", "search_term", "location", "distance_km",
+               "results_wanted", "hours_old", "is_remote"}
+    values = {k: v for k, v in fields.items() if k in allowed}
+    if "is_remote" in values:
+        values["is_remote"] = 1 if values["is_remote"] else 0
+    with _lock, _connect() as conn:
+        if values:
+            sets = ", ".join(f"{k} = ?" for k in values)
+            conn.execute(
+                f"UPDATE channels SET {sets} WHERE id = ?",
+                (*values.values(), channel_id),
+            )
+        row = conn.execute(
+            "SELECT * FROM channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+    return _channel_from_row(row) if row else None
+
+
 def delete_channel(channel_id: int) -> None:
     """Delete a channel and its associations (jobs themselves are kept)."""
     with _lock, _connect() as conn:
