@@ -4,6 +4,9 @@ import json
 import re
 import unicodedata
 from datetime import datetime
+from typing import Any
+
+from curl_cffi.requests import RetryStrategy
 
 from jobspy.model import (
     CompensationInterval,
@@ -19,15 +22,26 @@ from jobspy.util import TLSRotating, create_session
 # Unknown places fall back to a nationwide search.
 _PROVINCE_REGION = {
     # Veneto
-    "verona": "veneto", "vicenza": "veneto", "padova": "veneto", "venezia": "veneto",
-    "treviso": "veneto", "rovigo": "veneto", "belluno": "veneto",
+    "verona": "veneto",
+    "vicenza": "veneto",
+    "padova": "veneto",
+    "venezia": "veneto",
+    "treviso": "veneto",
+    "rovigo": "veneto",
+    "belluno": "veneto",
     # Lombardia
-    "milano": "lombardia", "brescia": "lombardia", "mantova": "lombardia",
-    "bergamo": "lombardia", "cremona": "lombardia",
+    "milano": "lombardia",
+    "brescia": "lombardia",
+    "mantova": "lombardia",
+    "bergamo": "lombardia",
+    "cremona": "lombardia",
     # Trentino-Alto Adige
-    "trento": "trentino-alto-adige", "bolzano": "trentino-alto-adige",
+    "trento": "trentino-alto-adige",
+    "bolzano": "trentino-alto-adige",
     # Emilia-Romagna
-    "bologna": "emilia-romagna", "modena": "emilia-romagna", "ferrara": "emilia-romagna",
+    "bologna": "emilia-romagna",
+    "modena": "emilia-romagna",
+    "ferrara": "emilia-romagna",
 }
 
 _CONTRACT = {
@@ -61,12 +75,16 @@ class Subito(Scraper):
         province = _slug((location or "").split(",")[0])
         region = _PROVINCE_REGION.get(province)
         if region:
-            return f"{self.base_url}/annunci-{region}/vendita/offerte-lavoro/{province}/"
+            return (
+                f"{self.base_url}/annunci-{region}/vendita/offerte-lavoro/{province}/"
+            )
         return f"{self.base_url}/annunci-italia/vendita/offerte-lavoro/"
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
         session = create_session(TLSRotating(scraper_input.proxies), scraper_input)
+        # Retry network errors with backoff (curl_cffi's own mechanism).
+        session.retry = RetryStrategy(count=3, delay=1, backoff="exponential")
         headers = {
             "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -79,7 +97,7 @@ class Subito(Scraper):
         seen: set[str] = set()
         page = 1
         while len(jobs) < wanted and page <= 10:
-            params = {"q": scraper_input.search_term or ""}
+            params: dict[str, str | int] = {"q": scraper_input.search_term or ""}
             if page > 1:
                 params["o"] = page
             try:
@@ -106,19 +124,21 @@ class Subito(Scraper):
         return jobs
 
     @staticmethod
-    def _extract_ads(html: str) -> list[dict]:
+    def _extract_ads(html: str) -> list[dict[str, Any]]:
         match = _NEXT_DATA_RE.search(html)
         if not match:
             return []
         try:
-            items = json.loads(match.group(1))["props"]["pageProps"]["initialState"]["items"]
+            items = json.loads(match.group(1))["props"]["pageProps"]["initialState"][
+                "items"
+            ]
         except (KeyError, TypeError, ValueError):
             return []
         ads = items.get("originalList") or []
         return [a.get("item", a) for a in ads if isinstance(a, dict)]
 
     @staticmethod
-    def _matches(ad: dict, search_term: str | None) -> bool:
+    def _matches(ad: dict[str, Any], search_term: str | None) -> bool:
         """Subito's own search is loose ("programmatore" also returns
         "PROGRAMMA GOL" sales jobs): keep an ad only if every word of the
         query appears in its title or text."""
@@ -127,11 +147,11 @@ class Subito(Scraper):
         return all(w in text for w in words)
 
     @staticmethod
-    def _feature(ad: dict, key: str) -> dict | None:
+    def _feature(ad: dict[str, Any], key: str) -> dict[str, Any] | None:
         values = ((ad.get("features") or {}).get(key) or {}).get("values") or []
         return values[0] if values else None
 
-    def _parse(self, ad: dict) -> JobPost | None:
+    def _parse(self, ad: dict[str, Any]) -> JobPost | None:
         title = (ad.get("subject") or "").strip()
         url = (ad.get("urls") or {}).get("default")
         if not title or not url:
@@ -142,14 +162,18 @@ class Subito(Scraper):
         province = (geo.get("city") or {}).get("shortName")
         region = (geo.get("region") or {}).get("value")
 
-        salary = {}
+        salary: dict[str, Any] = {}
         price = self._feature(ad, "/price")
         if price:
             try:
-                amount = float(price.get("key"))
+                amount = float(price.get("key") or "")
                 salary = dict(
-                    min_amount=amount, max_amount=amount, currency="EUR",
-                    interval=CompensationInterval.YEARLY if amount >= 5000 else CompensationInterval.MONTHLY,
+                    min_amount=amount,
+                    max_amount=amount,
+                    currency="EUR",
+                    interval=CompensationInterval.YEARLY
+                    if amount >= 5000
+                    else CompensationInterval.MONTHLY,
                 )
             except (TypeError, ValueError):
                 pass
@@ -162,7 +186,11 @@ class Subito(Scraper):
 
         extra = [
             f"{label}: {v['value']}"
-            for label, v in (("Contratto", contract), ("Orario", hours), ("Livello", level))
+            for label, v in (
+                ("Contratto", contract),
+                ("Orario", hours),
+                ("Livello", level),
+            )
             if v
         ]
         description = (ad.get("body") or "").strip()
@@ -171,7 +199,9 @@ class Subito(Scraper):
 
         date_posted = None
         try:
-            date_posted = datetime.strptime(ad.get("date", ""), "%Y-%m-%d %H:%M:%S").date()
+            date_posted = datetime.strptime(
+                ad.get("date", ""), "%Y-%m-%d %H:%M:%S"
+            ).date()
         except ValueError:
             pass
 
@@ -187,5 +217,7 @@ class Subito(Scraper):
             is_remote=False,
             job_level=level["value"] if level else None,
             company_industry=sector["value"] if sector else None,
-            listing_type=_CONTRACT.get(contract["key"], contract["value"]) if contract else None,
+            listing_type=_CONTRACT.get(contract["key"], contract["value"])
+            if contract
+            else None,
         )

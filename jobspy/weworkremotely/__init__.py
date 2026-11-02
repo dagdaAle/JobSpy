@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import date
 from email.utils import parsedate_to_datetime
 
-from jobspy.recency import within_recency
-
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
     JobPost,
     Location,
     Scraper,
     ScraperInput,
 )
-from jobspy.util import RequestsRotating, create_session, description_fields
+from jobspy.recency import within_recency
+from jobspy.util import RequestsRotating, create_session
 
 
 class WeWorkRemotely(Scraper):
@@ -40,7 +40,9 @@ class WeWorkRemotely(Scraper):
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
+        self.session = create_session(
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
+        )
         headers = {
             "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0)",
@@ -59,9 +61,7 @@ class WeWorkRemotely(Scraper):
             url = f"{self.base_url}/{feed_slug}.rss"
             self.log.info(f"Fetching WWR feed {feed_slug}")
             try:
-                response = self.session.get(
-                    url, headers=headers
-                )
+                response = self.session.get(url, headers=headers)
                 response.raise_for_status()
                 root = ET.fromstring(response.content)
             except Exception as e:
@@ -73,7 +73,9 @@ class WeWorkRemotely(Scraper):
                     break
                 try:
                     job_post = self._parse_item(item, feed_slug, search, seen_urls)
-                    if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
+                    if job_post and within_recency(
+                        job_post.date_posted, scraper_input.hours_old
+                    ):
                         job_list.append(job_post)
                 except Exception as e:
                     self.log.error(f"WeWorkRemotely: error parsing item - {e}")
@@ -82,7 +84,7 @@ class WeWorkRemotely(Scraper):
         return job_list
 
     def _parse_item(
-        self, item, feed_slug: str, search: str, seen_urls: set[str]
+        self, item: ET.Element, feed_slug: str, search: str, seen_urls: set[str]
     ) -> JobPost | None:
         link = self._text(item, "link")
         raw_title = self._text(item, "title")
@@ -106,9 +108,9 @@ class WeWorkRemotely(Scraper):
 
         description = self._text(item, "description")
         if description:
-            description = description_fields(description, self.scraper_input.description_format)[
-                "description"
-            ]
+            description = description_text(
+                description, self.scraper_input.description_format
+            )
 
         region = self._text(item, "region") or "Remote — area non specificata"
         category = self._text(item, "category")
@@ -129,14 +131,14 @@ class WeWorkRemotely(Scraper):
         )
 
     @staticmethod
-    def _text(item, tag: str) -> str | None:
+    def _text(item: ET.Element, tag: str) -> str | None:
         el = item.find(tag)
         if el is not None and el.text:
             return el.text.strip()
         return None
 
     @staticmethod
-    def _parse_date(date_str: str | None):
+    def _parse_date(date_str: str | None) -> date | None:
         if not date_str:
             return None
         try:

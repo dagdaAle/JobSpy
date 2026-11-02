@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import ast
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
-from jobspy.recency import within_recency
-
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
     CompensationInterval,
     JobPost,
@@ -13,7 +13,8 @@ from jobspy.model import (
     Scraper,
     ScraperInput,
 )
-from jobspy.util import RequestsRotating, create_session, description_fields
+from jobspy.recency import within_recency
+from jobspy.util import RequestsRotating, create_session
 
 
 class Remotive(Scraper):
@@ -31,7 +32,9 @@ class Remotive(Scraper):
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
+        self.session = create_session(
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
+        )
         headers = {
             "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0; +https://github.com/speedyapply/JobSpy)",
@@ -64,7 +67,9 @@ class Remotive(Scraper):
                 break
             try:
                 job_post = self._parse_job(raw)
-                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
+                if job_post and within_recency(
+                    job_post.date_posted, scraper_input.hours_old
+                ):
                     job_list.append(job_post)
             except Exception as e:
                 self.log.error(f"Remotive: error parsing job - {e}")
@@ -72,7 +77,7 @@ class Remotive(Scraper):
 
         return job_list
 
-    def _parse_job(self, raw: dict) -> JobPost | None:
+    def _parse_job(self, raw: dict[str, Any]) -> JobPost | None:
         job_url = raw.get("url")
         title = raw.get("title")
         if not job_url or not title:
@@ -83,12 +88,14 @@ class Remotive(Scraper):
         # Description formatting to respect the requested format
         description = raw.get("description")
         if description:
-            description = description_fields(description, self.scraper_input.description_format)[
-                "description"
-            ]
+            description = description_text(
+                description, self.scraper_input.description_format
+            )
 
         # candidate_required_location -> free-text location, kept as country string
-        candidate_location = raw.get("candidate_required_location") or "Remote — area non specificata"
+        candidate_location = (
+            raw.get("candidate_required_location") or "Remote — area non specificata"
+        )
         location_obj = Location(city=None, state=None, country=candidate_location)
 
         return JobPost(
@@ -122,7 +129,7 @@ class Remotive(Scraper):
         return [jt] if jt else None
 
     @staticmethod
-    def _parse_salary(salary_str: str | None) -> dict:
+    def _parse_salary(salary_str: str | None) -> dict[str, Any]:
         if not salary_str:
             return {}
         # Remotive salaries are free-form text (e.g. "$12K", "€40k - €60k").
@@ -130,7 +137,7 @@ class Remotive(Scraper):
         return {"interval": CompensationInterval.YEARLY}
 
     @staticmethod
-    def _parse_date(date_str: str | None):
+    def _parse_date(date_str: str | None) -> date | None:
         if not date_str:
             return None
         try:
@@ -139,7 +146,7 @@ class Remotive(Scraper):
             return None
 
     @staticmethod
-    def _parse_tags(tags) -> list[str] | None:
+    def _parse_tags(tags: object) -> list[str] | None:
         if not tags:
             return None
         if isinstance(tags, list):

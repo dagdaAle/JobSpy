@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
     CompensationInterval,
     JobPost,
@@ -9,17 +11,28 @@ from jobspy.model import (
     Scraper,
     ScraperInput,
 )
-from jobspy.util import RequestsRotating, create_session, description_fields
+from jobspy.util import RequestsRotating, create_session
 
 # Province -> region, as inPA writes it in a notice's "sedi". Used to keep
 # region-wide notices (sedi == ["Veneto"]) when searching for a province.
 _PROVINCE_REGION = {
-    "verona": "veneto", "vicenza": "veneto", "padova": "veneto", "venezia": "veneto",
-    "treviso": "veneto", "rovigo": "veneto", "belluno": "veneto",
-    "milano": "lombardia", "brescia": "lombardia", "mantova": "lombardia",
-    "bergamo": "lombardia", "cremona": "lombardia",
-    "trento": "trentino-alto adige", "bolzano": "trentino-alto adige",
-    "bologna": "emilia romagna", "modena": "emilia romagna", "ferrara": "emilia romagna",
+    "verona": "veneto",
+    "vicenza": "veneto",
+    "padova": "veneto",
+    "venezia": "veneto",
+    "treviso": "veneto",
+    "rovigo": "veneto",
+    "belluno": "veneto",
+    "milano": "lombardia",
+    "brescia": "lombardia",
+    "mantova": "lombardia",
+    "bergamo": "lombardia",
+    "cremona": "lombardia",
+    "trento": "trentino-alto adige",
+    "bolzano": "trentino-alto adige",
+    "bologna": "emilia romagna",
+    "modena": "emilia romagna",
+    "ferrara": "emilia romagna",
 }
 
 # Notices valid everywhere (ministries, national agencies).
@@ -45,9 +58,12 @@ class InPA(Scraper):
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
+        session = create_session(
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
+        )
         headers = {
-            "User-Agent": scraper_input.user_agent or "Mozilla/5.0 (compatible; JobSpy/1.0)",
+            "User-Agent": scraper_input.user_agent
+            or "Mozilla/5.0 (compatible; JobSpy/1.0)",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -88,7 +104,7 @@ class InPA(Scraper):
         return jobs
 
     @staticmethod
-    def _in_area(notice: dict, location: str | None) -> bool:
+    def _in_area(notice: dict[str, Any], location: str | None) -> bool:
         place = (location or "").split(",")[0].strip().lower()
         if not place or place in _NATIONAL:
             return True
@@ -104,7 +120,7 @@ class InPA(Scraper):
         # Region-wide notice: names the region and no specific province.
         return sedi == [region]
 
-    def _parse(self, notice: dict) -> JobPost | None:
+    def _parse(self, notice: dict[str, Any]) -> JobPost | None:
         title = (notice.get("titolo") or "").strip()
         if not title or not notice.get("id"):
             return None
@@ -113,26 +129,32 @@ class InPA(Scraper):
             title = f"{title} – {figure}"
 
         description = notice.get("descrizione") or notice.get("descrizioneBreve") or ""
-        description = description_fields(description, self.scraper_input.description_format)[
-            "description"
-        ]
+        description = (
+            description_text(description, self.scraper_input.description_format) or ""
+        )
 
         deadline = self._date(notice.get("dataScadenza"))
         facts = [
             f"Scadenza domande: {deadline.strftime('%d/%m/%Y')}" if deadline else None,
             f"Posti: {notice['numPosti']}" if notice.get("numPosti") else None,
-            f"Procedura: {', '.join(notice.get('categorie') or [])}" if notice.get("categorie") else None,
-            f"Sedi: {', '.join(notice.get('sedi') or [])}" if notice.get("sedi") else None,
+            f"Procedura: {', '.join(notice.get('categorie') or [])}"
+            if notice.get("categorie")
+            else None,
+            f"Sedi: {', '.join(notice.get('sedi') or [])}"
+            if notice.get("sedi")
+            else None,
         ]
         header = "\n".join(f for f in facts if f)
         description = f"{header}\n\n{description}".strip() if header else description
 
         sedi = notice.get("sedi") or []
-        salary = {}
+        salary: dict[str, Any] = {}
         lo, hi = notice.get("salaryMin"), notice.get("salaryMax")
         if lo or hi:
             salary = dict(
-                min_amount=lo or hi, max_amount=hi or lo, currency="EUR",
+                min_amount=lo or hi,
+                max_amount=hi or lo,
+                currency="EUR",
                 interval=CompensationInterval.YEARLY,
             )
 
@@ -158,7 +180,7 @@ class InPA(Scraper):
         )
 
     @staticmethod
-    def _date(value: str | None):
+    def _date(value: str | None) -> date | None:
         if not value:
             return None
         try:

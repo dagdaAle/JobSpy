@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
-from jobspy.recency import within_recency
-
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
     JobPost,
     Location,
     Scraper,
     ScraperInput,
 )
-from jobspy.util import RequestsRotating, create_session, description_fields
+from jobspy.recency import within_recency
+from jobspy.util import RequestsRotating, create_session
 
 
 class WorkingNomads(Scraper):
@@ -28,7 +29,9 @@ class WorkingNomads(Scraper):
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
+        self.session = create_session(
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
+        )
         headers = {
             "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0)",
@@ -59,7 +62,9 @@ class WorkingNomads(Scraper):
                 continue
             try:
                 job_post = self._parse_job(raw)
-                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
+                if job_post and within_recency(
+                    job_post.date_posted, scraper_input.hours_old
+                ):
                     job_list.append(job_post)
             except Exception as e:
                 self.log.error(f"WorkingNomads: error parsing job - {e}")
@@ -68,7 +73,7 @@ class WorkingNomads(Scraper):
         return job_list
 
     @staticmethod
-    def _matches_search(raw: dict, search: str) -> bool:
+    def _matches_search(raw: dict[str, Any], search: str) -> bool:
         haystack = " ".join(
             [
                 str(raw.get("title", "")),
@@ -79,7 +84,7 @@ class WorkingNomads(Scraper):
         ).lower()
         return search in haystack
 
-    def _parse_job(self, raw: dict) -> JobPost | None:
+    def _parse_job(self, raw: dict[str, Any]) -> JobPost | None:
         job_url = raw.get("url")
         title = raw.get("title")
         if not job_url or not title:
@@ -89,9 +94,9 @@ class WorkingNomads(Scraper):
 
         description = raw.get("description")
         if description:
-            description = description_fields(description, self.scraper_input.description_format)[
-                "description"
-            ]
+            description = description_text(
+                description, self.scraper_input.description_format
+            )
 
         raw_location = raw.get("location") or "Remote"
         location_obj = Location(city=None, state=None, country=raw_location)
@@ -110,7 +115,7 @@ class WorkingNomads(Scraper):
         )
 
     @staticmethod
-    def _parse_tags(tags) -> list[str] | None:
+    def _parse_tags(tags: object) -> list[str] | None:
         if not tags:
             return None
         if isinstance(tags, list):
@@ -121,7 +126,7 @@ class WorkingNomads(Scraper):
         return None
 
     @staticmethod
-    def _parse_date(date_str: str | None):
+    def _parse_date(date_str: str | None) -> date | None:
         if not date_str:
             return None
         try:

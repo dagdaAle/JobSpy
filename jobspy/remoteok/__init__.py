@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
-from jobspy.recency import within_recency
-
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
     CompensationInterval,
     JobPost,
@@ -11,7 +11,8 @@ from jobspy.model import (
     Scraper,
     ScraperInput,
 )
-from jobspy.util import RequestsRotating, create_session, description_fields
+from jobspy.recency import within_recency
+from jobspy.util import RequestsRotating, create_session
 
 
 class RemoteOK(Scraper):
@@ -28,7 +29,9 @@ class RemoteOK(Scraper):
 
     def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
+        self.session = create_session(
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
+        )
         headers = {
             "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -61,7 +64,9 @@ class RemoteOK(Scraper):
                 continue
             try:
                 job_post = self._parse_job(raw)
-                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
+                if job_post and within_recency(
+                    job_post.date_posted, scraper_input.hours_old
+                ):
                     job_list.append(job_post)
             except Exception as e:
                 self.log.error(f"RemoteOK: error parsing job - {e}")
@@ -70,7 +75,7 @@ class RemoteOK(Scraper):
         return job_list
 
     @staticmethod
-    def _matches_search(raw: dict, search: str) -> bool:
+    def _matches_search(raw: dict[str, Any], search: str) -> bool:
         haystack = " ".join(
             [
                 str(raw.get("position", "")),
@@ -80,7 +85,7 @@ class RemoteOK(Scraper):
         ).lower()
         return search in haystack
 
-    def _parse_job(self, raw: dict) -> JobPost | None:
+    def _parse_job(self, raw: dict[str, Any]) -> JobPost | None:
         job_url = raw.get("url") or raw.get("apply_url")
         title = raw.get("position")
         if not job_url or not title:
@@ -90,9 +95,9 @@ class RemoteOK(Scraper):
 
         description = raw.get("description")
         if description:
-            description = description_fields(description, self.scraper_input.description_format)[
-                "description"
-            ]
+            description = description_text(
+                description, self.scraper_input.description_format
+            )
 
         raw_location = raw.get("location") or "Remote"
         location_obj = Location(city=None, state=None, country=raw_location)
@@ -112,7 +117,7 @@ class RemoteOK(Scraper):
         )
 
     @staticmethod
-    def _parse_salary(raw: dict) -> dict:
+    def _parse_salary(raw: dict[str, Any]) -> dict[str, Any]:
         try:
             smin = int(raw.get("salary_min") or 0)
             smax = int(raw.get("salary_max") or 0)
@@ -128,7 +133,7 @@ class RemoteOK(Scraper):
         )
 
     @staticmethod
-    def _parse_date(date_str: str | None):
+    def _parse_date(date_str: str | None) -> date | None:
         if not date_str:
             return None
         try:
