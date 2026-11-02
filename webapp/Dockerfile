@@ -25,14 +25,8 @@ COPY README.md /src/README.md
 COPY jobspy /src/jobspy
 RUN pip install --no-cache-dir --no-deps /src
 
-# 3) Copy the web app itself.
-COPY webapp/app.py /app/app.py
-COPY webapp/storage.py /app/storage.py
-COPY webapp/analyzer.py /app/analyzer.py
-COPY webapp/cv_render.py /app/cv_render.py
-COPY webapp/cv_template.py /app/cv_template.py
-COPY webapp/cv_import.py /app/cv_import.py
-COPY webapp/cv_review.py /app/cv_review.py
+# 3) Copy the web app itself (every module, so new files are never left out).
+COPY webapp/*.py /app/
 COPY --from=frontend /static /app/static
 
 # Feedback DB lives here (mounted as a volume in docker-compose).
