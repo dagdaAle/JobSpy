@@ -1,322 +1,271 @@
 from __future__ import annotations
 
-import re
-import json
-import requests
-from typing import Tuple
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import math
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
-from jobspy.glassdoor.constant import fallback_token, query_template, headers
-from jobspy.glassdoor.util import (
-    get_cursor_for_page,
-    parse_compensation,
-    parse_location,
+from curl_cffi.requests import Response
+
+from jobspy.glassdoor.constant import (
+    details_alias,
+    details_per_request,
+    domains,
+    headers,
+    job_type_codes,
+    jobs_per_page,
+    location_types,
+    pay_intervals,
+    search_query,
 )
-from jobspy.util import (
-    extract_emails_from_text,
-    create_logger,
-    create_session,
-    markdown_converter,
+from jobspy.glassdoor.model import (
+    Header,
+    JobListings,
+    JobView,
+    Listing,
+    Place,
 )
-from jobspy.exception import GlassdoorException
 from jobspy.model import (
+    Compensation,
     JobPost,
-    JobResponse,
-    DescriptionFormat,
+    Location,
     Scraper,
     ScraperInput,
-    Site,
 )
-
-log = create_logger("Glassdoor")
+from jobspy.util import (
+    TLSRotating,
+    check_status,
+    create_session,
+    description_fields,
+    get_enum_from_job_type,
+)
 
 
 class Glassdoor(Scraper):
-    def __init__(
-        self, proxies: list[str] | str | None = None, ca_cert: str | None = None, user_agent: str | None = None
-    ):
-        """
-        Initializes GlassdoorScraper with the Glassdoor job search url
-        """
-        site = Site(Site.GLASSDOOR)
-        super().__init__(site, proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
-
-        self.base_url = None
-        self.country = None
-        self.session = None
-        self.scraper_input = None
-        self.jobs_per_page = 30
-        self.max_pages = 30
-        self.seen_urls = set()
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
-        """
-        Scrapes Glassdoor for jobs with scraper_input criteria.
-        :param scraper_input: Information about job search criteria.
-        :return: JobResponse containing a list of jobs.
-        """
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.scraper_input.results_wanted = min(900, scraper_input.results_wanted)
-        self.base_url = self.scraper_input.country.get_glassdoor_url()
-
-        self.session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, has_retry=True
-        )
-        token = self._get_csrf_token()
-        headers["gd-csrf-token"] = token if token else fallback_token
-        if self.user_agent:
-            headers["user-agent"] = self.user_agent
-        self.session.headers.update(headers)
-
-        location_id, location_type = self._get_location(
-            scraper_input.location, scraper_input.is_remote
-        )
-        if location_type is None:
-            log.error("Glassdoor: location not parsed")
-            return JobResponse(jobs=[])
-        job_list: list[JobPost] = []
-        cursor = None
-
-        range_start = 1 + (scraper_input.offset // self.jobs_per_page)
-        tot_pages = (scraper_input.results_wanted // self.jobs_per_page) + 2
-        range_end = min(tot_pages, self.max_pages + 1)
-        for page in range(range_start, range_end):
-            log.info(f"search page: {page} / {range_end - 1}")
-            try:
-                jobs, cursor = self._fetch_jobs_page(
-                    scraper_input, location_id, location_type, page, cursor
-                )
-                job_list.extend(jobs)
-                if not jobs or len(job_list) >= scraper_input.results_wanted:
-                    job_list = job_list[: scraper_input.results_wanted]
-                    break
-            except Exception as e:
-                log.error(f"Glassdoor: {str(e)}")
-                break
-        return JobResponse(jobs=job_list)
-
-    def _fetch_jobs_page(
-        self,
-        scraper_input: ScraperInput,
-        location_id: int,
-        location_type: str,
-        page_num: int,
-        cursor: str | None,
-    ) -> Tuple[list[JobPost], str | None]:
-        """
-        Scrapes a page of Glassdoor for jobs with scraper_input criteria
-        """
-        jobs = []
-        self.scraper_input = scraper_input
+        country = scraper_input.country_indeed
+        if country not in domains:
+            self.warn(f"country_indeed {country.value} isn't supported, skipping it")
+            return []
         try:
-            payload = self._add_payload(location_id, location_type, page_num, cursor)
-            response = self.session.post(
-                f"{self.base_url}/graph",
-                timeout_seconds=15,
-                data=payload,
+            self.base_url = f"https://{domains[country]}"
+            self.session = create_session(
+                TLSRotating(scraper_input.proxies), scraper_input, headers
             )
-            if response.status_code != 200:
-                exc_msg = f"bad response status code: {response.status_code}"
-                raise GlassdoorException(exc_msg)
-            res_json = response.json()[0]
-            if "errors" in res_json:
-                raise ValueError("Error encountered in API response")
-        except (
-            requests.exceptions.ReadTimeout,
-            GlassdoorException,
-            ValueError,
-            Exception,
-        ) as e:
-            log.error(f"Glassdoor: {str(e)}")
-            return jobs, None
+            variables = self._search_variables()
+        except Exception as e:
+            self.fail(str(e))
+            return []
+        if variables is None:
+            return []
 
-        jobs_data = res_json["data"]["jobListings"]["jobListings"]
+        job_list: list[JobPost] = []
+        seen: set[int | None] = set()
+        page, skip = 1, scraper_input.offset
+        cursor: str | None = None
 
-        with ThreadPoolExecutor(max_workers=self.jobs_per_page) as executor:
-            future_to_job_data = {
-                executor.submit(self._process_job, job): job for job in jobs_data
-            }
-            for future in as_completed(future_to_job_data):
+        while len(job_list) < scraper_input.results_wanted:
+            self.log.info(f"search page: {page}")
+            try:
+                response = self._graph(
+                    "JobSearchResultsQuery",
+                    search_query,
+                    {**variables, "pageNumber": page, "pageCursor": cursor},
+                )
+                check_status(response)
+                answer = response.json()[0]
+                result = (answer.get("data") or {}).get("jobListings")
+                if not result:
+                    raise ValueError(f"API error: {answer.get('errors')}")
+                job_listings = JobListings.model_validate(result)
+                listings = job_listings.jobListings or []
+                cursors = job_listings.paginationCursors or []
+                cursor = {c.pageNumber: c.cursor for c in cursors}.get(page + 1)
+            except Exception as e:
+                self.fail(str(e))
+                break
+
+            seen_before = len(seen)
+            page_jobs: list[JobPost] = []
+            for listing in listings:
                 try:
-                    job_post = future.result()
-                    if job_post:
-                        jobs.append(job_post)
-                except Exception as exc:
-                    raise GlassdoorException(f"Glassdoor generated an exception: {exc}")
+                    entry = Listing.model_validate(listing)
+                    job, job_id = entry.jobview, entry.listingId
+                    if job_id in seen:
+                        continue
+                    seen.add(job_id)
+                    if skip:
+                        skip -= 1
+                        continue
+                    job_post = self._process_job(job)
+                except Exception as e:
+                    self.log.warning(f"skipping job: {e}")
+                    continue
+                if job_post:
+                    page_jobs.append(job_post)
+                    if len(job_list) + len(page_jobs) >= scraper_input.results_wanted:
+                        break
 
-        return jobs, get_cursor_for_page(
-            res_json["data"]["jobListings"]["paginationCursors"], page_num + 1
+            if scraper_input.fetch_description and page_jobs:
+                details = self._fetch_details([job.id for job in page_jobs if job.id])
+                page_jobs = [
+                    job.model_copy(update=details[job.id] if job.id in details else {})
+                    for job in page_jobs
+                ]
+            job_list += page_jobs
+
+            if not cursor or len(seen) == seen_before:
+                break
+            page += 1
+
+        return job_list
+
+    def _graph(
+        self, operation: str, query: str, variables: dict[str, object]
+    ) -> Response:
+        return self.session.post(
+            f"{self.base_url}/graph",
+            json=[{"operationName": operation, "variables": variables, "query": query}],
         )
 
-    def _get_csrf_token(self):
-        """
-        Fetches csrf token needed for API by visiting a generic page
-        """
-        res = self.session.get(f"{self.base_url}/Job/computer-science-jobs.htm")
-        pattern = r'"token":\s*"([^"]+)"'
-        matches = re.findall(pattern, res.text)
-        token = None
-        if matches:
-            token = matches[0]
-        return token
-
-    def _process_job(self, job_data):
-        """
-        Processes a single job and fetches its description.
-        """
-        job_id = job_data["jobview"]["job"]["listingId"]
-        job_url = f"{self.base_url}job-listing/j?jl={job_id}"
-        if job_url in self.seen_urls:
+    def _search_variables(self) -> dict[str, object] | None:
+        """The search's variables, or None when the location isn't found."""
+        response = self.session.get(
+            f"{self.base_url}/autocomplete/location"
+            "?locationTypeFilters=CITY,STATE,COUNTRY&caller=jobs"
+            f"&term={quote(self.scraper_input.location or '')}"
+        )
+        check_status(response)
+        variables: dict[str, object] = {
+            "keyword": self.scraper_input.search_term,
+            "numJobsToShow": jobs_per_page,
+            "filterParams": self._filters(),
+        }
+        if not self.scraper_input.location:
+            return variables
+        places = response.json()
+        if not places:
+            self.fail(f"location '{self.scraper_input.location}' not found")
             return None
-        self.seen_urls.add(job_url)
-        job = job_data["jobview"]
-        title = job["job"]["jobTitleText"]
-        company_name = job["header"]["employerNameFromSearch"]
-        company_id = job_data["jobview"]["header"]["employer"]["id"]
-        location_name = job["header"].get("locationName", "")
-        location_type = job["header"].get("locationType", "")
-        age_in_days = job["header"].get("ageInDays")
-        is_remote, location = False, None
-        date_diff = (datetime.now() - timedelta(days=age_in_days)).date()
-        date_posted = date_diff if age_in_days is not None else None
+        place = Place.model_validate(places[0])
+        location_id = place.locationId
+        location_type = location_types[place.locationType]
+        return {
+            **variables,
+            "locationId": location_id,
+            "locationType": location_type,
+            "parameterUrlInput": f"IL.0,12_I{location_type}{location_id}",
+        }
 
-        if location_type == "S":
-            is_remote = True
-        else:
-            location = parse_location(location_name)
+    def _filters(self) -> list[dict[str, str]]:
+        filters: dict[str, str | int] = {}
+        if self.scraper_input.location and self.scraper_input.distance is not None:
+            filters["radius"] = self.scraper_input.distance
+        if hours_old := self.scraper_input.hours_old:
+            filters["fromAge"] = math.ceil(hours_old / 24)
+        job_type = self.scraper_input.job_type
+        if job_type in job_type_codes:
+            filters["jobType"] = job_type_codes[job_type]
+        elif job_type:
+            self.warn(f"job_type {job_type.value} isn't supported, ignoring it")
+        if self.scraper_input.is_remote:
+            filters["remoteWorkType"] = 1
+        if self.scraper_input.easy_apply:
+            filters["applicationType"] = 1
+        return [
+            {"filterKey": key, "values": str(value)} for key, value in filters.items()
+        ]
 
-        compensation = parse_compensation(job["header"])
-        try:
-            description = self._fetch_job_description(job_id)
-        except:
-            description = None
-        company_url = f"{self.base_url}Overview/W-EI_IE{company_id}.htm"
-        company_logo = (
-            job_data["jobview"].get("overview", {}).get("squareLogoUrl", None)
-        )
-        listing_type = (
-            job_data["jobview"]
-            .get("header", {})
-            .get("adOrderSponsorshipLevel", "")
-            .lower()
-        )
+    def _process_job(self, raw: dict[str, object]) -> JobPost | None:
+        job = JobView.model_validate(raw)
+        header = job.header
+        age = header.ageInDays
+        hours_old = self.scraper_input.hours_old
+        if hours_old and age >= math.ceil(hours_old / 24):
+            return None
+
+        job_id = job.listingId
+        company_id = header.id
+        company = job.overview
+        website = company.website
+        if website and not website.startswith("http"):
+            website = f"https://{website}"
+        job_types = [
+            job_type
+            for key in header.jobTypeKeys or []
+            if (job_type := get_enum_from_job_type(key.rpartition(".")[2]))
+        ]
         return JobPost(
             id=f"gd-{job_id}",
-            title=title,
-            company_url=company_url if company_id else None,
-            company_name=company_name,
-            date_posted=date_posted,
-            job_url=job_url,
-            location=location,
-            compensation=compensation,
-            is_remote=is_remote,
-            description=description,
-            emails=extract_emails_from_text(description) if description else None,
-            company_logo=company_logo,
-            listing_type=listing_type,
+            title=job.jobTitleText,
+            company=header.employerNameFromSearch,
+            company_url=(
+                f"{self.base_url}/Overview/W-EI_IE{company_id}.htm"
+                if company_id
+                else None
+            ),
+            company_logo=company.squareLogoUrl,
+            location=self._parse_location(header, job.country),
+            job_url=f"{self.base_url}/job-listing/j?jl={job_id}",
+            date_posted=datetime.now(timezone.utc).date() - timedelta(days=age),
+            job_type=job_types or None,
+            is_remote="WORK_FROM_HOME" in (header.remoteWorkTypes or [])
+            or header.locationName == "Remote",
+            **self._parse_salary(header).model_dump(),
+            listing_type=header.adOrderSponsorshipLevel.lower(),
+            company_rating=header.rating or None,
+            company_industry=company.industryName,
+            company_url_direct=website or None,
+            company_addresses=company.headquarters,
+            company_num_employees=company.size,
+            company_revenue=company.revenue,
+            company_description=company.description,
         )
 
-    def _fetch_job_description(self, job_id):
-        """
-        Fetches the job description for a single job ID.
-        """
-        url = f"{self.base_url}/graph"
-        body = [
-            {
-                "operationName": "JobDetailQuery",
-                "variables": {
-                    "jl": job_id,
-                    "queryString": "q",
-                    "pageTypeEnum": "SERP",
-                },
-                "query": """
-                query JobDetailQuery($jl: Long!, $queryString: String, $pageTypeEnum: PageTypeEnum) {
-                    jobview: jobView(
-                        listingId: $jl
-                        contextHolder: {queryString: $queryString, pageTypeEnum: $pageTypeEnum}
-                    ) {
-                        job {
-                            description
-                            __typename
-                        }
-                        __typename
-                    }
-                }
-                """,
-            }
-        ]
-        res = requests.post(url, json=body, headers=headers)
-        if res.status_code != 200:
+    @staticmethod
+    def _parse_salary(header: Header) -> Compensation:
+        pay = header.payPeriodAdjustedPay
+        if not pay:
+            return Compensation()
+        return Compensation(
+            interval=pay_intervals.get(header.payPeriod or ""),
+            min_amount=round(pay.p10, 2),
+            max_amount=round(pay.p90, 2),
+            currency=header.payCurrency,
+        )
+
+    @staticmethod
+    def _parse_location(header: Header, country: str | None) -> Location | None:
+        """locationName is a city ("Chicago, IL", "Paris"), a state ("Oregon"), a country or "Remote"."""
+        name, kind = header.locationName, header.locationType
+        if not name or name == "Remote":
             return None
-        data = res.json()[0]
-        desc = data["data"]["jobview"]["job"]["description"]
-        if self.scraper_input.description_format == DescriptionFormat.MARKDOWN:
-            desc = markdown_converter(desc)
-        return desc
+        if kind == "N":
+            return Location(country=country or name)
+        if kind == "S":
+            return Location(state=name, country=country)
+        city, *rest = name.split(", ")
+        return Location(city=city, state=rest[-1] if rest else None, country=country)
 
-    def _get_location(self, location: str, is_remote: bool) -> (int, str):
-        if not location or is_remote:
-            return "11047", "STATE"  # remote options
-        url = f"{self.base_url}/findPopularLocationAjax.htm?maxLocationsToReturn=10&term={location}"
-        res = self.session.get(url)
-        if res.status_code != 200:
-            if res.status_code == 429:
-                err = f"429 Response - Blocked by Glassdoor for too many requests"
-                log.error(err)
-                return None, None
-            else:
-                err = f"Glassdoor response status code {res.status_code}"
-                err += f" - {res.text}"
-                log.error(f"Glassdoor response status code {res.status_code}")
-                return None, None
-        items = res.json()
-
-        if not items:
-            raise ValueError(f"Location '{location}' not found on Glassdoor")
-        location_type = items[0]["locationType"]
-        if location_type == "C":
-            location_type = "CITY"
-        elif location_type == "S":
-            location_type = "STATE"
-        elif location_type == "N":
-            location_type = "COUNTRY"
-        return int(items[0]["locationId"]), location_type
-
-    def _add_payload(
-        self,
-        location_id: int,
-        location_type: str,
-        page_num: int,
-        cursor: str | None = None,
-    ) -> str:
-        fromage = None
-        if self.scraper_input.hours_old:
-            fromage = max(self.scraper_input.hours_old // 24, 1)
-        filter_params = []
-        if self.scraper_input.easy_apply:
-            filter_params.append({"filterKey": "applicationType", "values": "1"})
-        if fromage:
-            filter_params.append({"filterKey": "fromAge", "values": str(fromage)})
-        payload = {
-            "operationName": "JobSearchResultsQuery",
-            "variables": {
-                "excludeJobListingIds": [],
-                "filterParams": filter_params,
-                "keyword": self.scraper_input.search_term,
-                "numJobsToShow": 30,
-                "locationType": location_type,
-                "locationId": int(location_id),
-                "parameterUrlInput": f"IL.0,12_I{location_type}{location_id}",
-                "pageNumber": page_num,
-                "pageCursor": cursor,
-                "fromage": fromage,
-                "sort": "date",
-            },
-            "query": query_template,
-        }
-        if self.scraper_input.job_type:
-            payload["variables"]["filterParams"].append(
-                {"filterKey": "jobType", "values": self.scraper_input.job_type.value[0]}
-            )
-        return json.dumps([payload])
+    def _fetch_details(self, job_ids: list[str]) -> dict[str, dict[str, object]]:
+        """The description and emails by job id, one request for every 25 jobs."""
+        details: dict[str, dict[str, object]] = {}
+        try:
+            for start in range(0, len(job_ids), details_per_request):
+                aliases = "".join(
+                    details_alias % (job_id[3:], job_id[3:])
+                    for job_id in job_ids[start : start + details_per_request]
+                )
+                response = self._graph(
+                    "JobDetails", f"query JobDetails {{{aliases}}}", {}
+                )
+                check_status(response)
+                for alias, view in response.json()[0]["data"].items():
+                    if view:
+                        details[f"gd-{alias[1:]}"] = description_fields(
+                            view["job"]["description"],
+                            self.scraper_input.description_format,
+                        )
+        except Exception as e:
+            self.log.warning(f"job details: {e}")
+        return details
