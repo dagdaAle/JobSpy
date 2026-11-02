@@ -3,6 +3,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "../api/client";
 import type {
   ChannelRequest,
@@ -11,8 +12,14 @@ import type {
   Verdict,
 } from "../api/types";
 
+// Polls while the AI backlog is being worked through, so the header counter
+// and the cards' scores fill in without a reload.
 export function useStatus() {
-  return useQuery({ queryKey: ["status"], queryFn: api.status });
+  return useQuery({
+    queryKey: ["status"],
+    queryFn: api.status,
+    refetchInterval: (q) => (q.state.data?.analysis_pending ? 10_000 : 60_000),
+  });
 }
 
 export function useAnalytics() {
@@ -33,13 +40,24 @@ export function useChannels() {
   return useQuery({ queryKey: ["channels"], queryFn: api.channels });
 }
 
+// Update log. Polls while the page is open so a running refresh shows up.
+export function useLogs(enabled = true) {
+  return useQuery({
+    queryKey: ["logs"],
+    queryFn: () => api.logs(),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
 // The active job list. `channelId === null` means "all stored jobs" (/jobs);
 // a number scopes to one channel's jobs.
-export function useJobs(channelId: number | null) {
+export function useJobs(channelId: number | null, scope: "active" | "archived" | "applications" = "active") {
   return useQuery({
-    queryKey: ["jobs", channelId],
+    queryKey: ["jobs", channelId, scope],
     queryFn: () =>
-      channelId === null ? api.jobs() : api.channelJobs(channelId),
+      scope === "applications" ? api.applications() : channelId === null ? api.jobs(scope === "archived") : api.channelJobs(channelId),
+    refetchInterval: 60_000,
   });
 }
 
@@ -58,9 +76,10 @@ export function useCreateChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ChannelRequest) => api.createChannel(body),
-    onSuccess: () => {
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["channels"] });
       qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
     },
   });
 }
@@ -69,7 +88,10 @@ export function useDeleteChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.deleteChannel(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["channels"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["channels"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
+    },
   });
 }
 
@@ -77,9 +99,11 @@ export function useRefreshChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.refreshChannel(id),
-    onSuccess: () => {
+    // Settled, not success: a failed refresh is logged too.
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["channels"] });
       qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
     },
   });
 }
@@ -108,12 +132,23 @@ export function useFeedback() {
       });
       return { snapshot };
     },
-    onError: (_err, _v, ctx) => {
+    onError: (err, _v, ctx) => {
+      toast.error(`Salvataggio non riuscito: ${err.message}`);
       ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
-    // Deliberately no jobs refetch here: the optimistic cache already matches
-    // the server, and an immediate refetch was reverting the UI. Analytics
-    // (favourites count) refreshes on its own next load.
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["analytics"] }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["job"] });
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+      qc.invalidateQueries({ queryKey: ["channels"] });
+    },
   });
+}
+
+export function useCvs() {
+  return useQuery({ queryKey: ["cvs"], queryFn: api.cvs });
+}
+
+export function useCv(id: number | null) {
+  return useQuery({ queryKey: ["cv", id], queryFn: () => api.cv(id as number), enabled: id !== null });
 }

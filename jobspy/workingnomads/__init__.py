@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from jobspy.recency import within_recency
+
 from jobspy.model import (
     Scraper,
     ScraperInput,
@@ -80,7 +82,7 @@ class WorkingNomads(Scraper):
                 continue
             try:
                 job_post = self._parse_job(raw)
-                if job_post:
+                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                     job_list.append(job_post)
             except Exception as e:
                 log.error(f"WorkingNomads: error parsing job - {e}")

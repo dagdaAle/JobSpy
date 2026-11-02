@@ -298,6 +298,8 @@ class Site(Enum):
     REMOTEOK = "remoteok"
     WEWORKREMOTELY = "weworkremotely"
     WORKINGNOMADS = "workingnomads"
+    SUBITO = "subito"
+    INPA = "inpa"
 
 
 class SalarySource(Enum):

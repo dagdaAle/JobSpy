@@ -1,3 +1,10 @@
+FROM node:22-slim AS frontend
+WORKDIR /frontend
+COPY webapp/frontend/package*.json ./
+RUN npm ci
+COPY webapp/frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 # Avoid interactive prompts, keep Python output unbuffered for logs.
@@ -22,7 +29,11 @@ RUN pip install --no-cache-dir --no-deps /src
 COPY webapp/app.py /app/app.py
 COPY webapp/storage.py /app/storage.py
 COPY webapp/analyzer.py /app/analyzer.py
-COPY webapp/static /app/static
+COPY webapp/cv_render.py /app/cv_render.py
+COPY webapp/cv_template.py /app/cv_template.py
+COPY webapp/cv_import.py /app/cv_import.py
+COPY webapp/cv_review.py /app/cv_review.py
+COPY --from=frontend /static /app/static
 
 # Feedback DB lives here (mounted as a volume in docker-compose).
 RUN mkdir -p /data

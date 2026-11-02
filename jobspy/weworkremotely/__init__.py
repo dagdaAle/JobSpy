@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from jobspy.recency import within_recency
+
 from jobspy.model import (
     Scraper,
     ScraperInput,
@@ -93,7 +95,7 @@ class WeWorkRemotely(Scraper):
                     break
                 try:
                     job_post = self._parse_item(item, feed_slug, search, seen_urls)
-                    if job_post:
+                    if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                         job_list.append(job_post)
                 except Exception as e:
                     log.error(f"WeWorkRemotely: error parsing item - {e}")
@@ -132,7 +134,7 @@ class WeWorkRemotely(Scraper):
             elif fmt == DescriptionFormat.PLAIN:
                 description = plain_converter(description)
 
-        region = self._text(item, "region") or "Anywhere in the World"
+        region = self._text(item, "region") or "Remote — area non specificata"
         category = self._text(item, "category")
         location_obj = Location(city=None, state=None, country=region)
 

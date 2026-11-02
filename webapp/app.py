@@ -27,12 +27,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from jobspy.presets import (
+    ITALY_EXTRA_SITES,
     ITALY_LOCAL_SITES,
     REMOTE_ONLY_SITES,
     search_italy,
@@ -41,6 +42,8 @@ from jobspy.presets import (
 )
 
 import analyzer
+import cv_render
+import cv_review
 import storage
 
 app = FastAPI(title="JobSpy Web", version="2.0.0")
@@ -82,12 +85,16 @@ _SALARY_MAP = {
 # Full column set stored for a channel job (rich detail page + analysis).
 _FULL_COLUMNS = _ANALYSIS_COLUMNS + _RICH_PASSTHROUGH + list(_SALARY_MAP.keys())
 
-# Cap analyses per search to bound API cost/latency (overridable via env).
-_MAX_ANALYSIS = int(os.environ.get("MAX_ANALYSIS_PER_SEARCH", "30"))
+# Parallel DeepSeek calls while analyzing. Every job gets analyzed; this only
+# bounds how many requests are in flight at once.
+_ANALYSIS_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "5"))
 
-# Only keep jobs posted within this many days; older ones are purged daily
-# (liked jobs are always kept). Also the recency window sent to the scraper.
-_RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
+# A job with no like/dislike leaves the feed this many days after it was first
+# seen. It is archived, never deleted.
+_FEED_DAYS = int(os.environ.get("FEED_DAYS", "7"))
+
+# Default recency window (hours_old) for /maintenance/recency.
+_RECENCY_DAYS = 14
 
 # Hour of the day (local time, 0-23) at which channels refresh. Default 09:00.
 _REFRESH_HOUR = int(os.environ.get("REFRESH_HOUR", "9"))
@@ -120,7 +127,7 @@ class FeedbackRequest(BaseModel):
 
 
 # All sites that can back a channel.
-_ALL_SITES = ITALY_LOCAL_SITES + REMOTE_ONLY_SITES
+_ALL_SITES = ITALY_LOCAL_SITES + ITALY_EXTRA_SITES + REMOTE_ONLY_SITES
 
 
 class ChannelRequest(BaseModel):
@@ -137,15 +144,23 @@ class ChannelRequest(BaseModel):
 @app.on_event("startup")
 def _startup() -> None:
     storage.init_db()
-    # Extract CV text from the mounted PDF once, if we don't have it yet.
+    storage.mark_interrupted_logs()
+    # Re-read the mounted CV at every start: a changed PDF becomes a new CV
+    # version (older analyses stay linked to the CV they were made with).
     try:
-        if not storage.get_cv_text():
-            cv_text = analyzer.extract_pdf_text()
-            if cv_text:
-                storage.set_cv_text(cv_text)
+        # The mounted PDF only seeds an empty CV library; afterwards the
+        # default CV chosen in the UI drives the analyses.
+        cv_text = analyzer.extract_pdf_text()
+        if cv_text:
+            storage.seed_cv_from_text(cv_text)
     except Exception:
         # CV is optional; never block startup on parsing issues.
-        pass
+        traceback.print_exc()
+
+    # Apply the feed rule right away, then analyze whatever is still missing.
+    storage.configure_analysis(analyzer.MODEL, analyzer.PROMPT_VERSION)
+    _archive_stale(trigger="startup")
+    _kick_analysis(trigger="startup")
 
     # Start the background scheduler that refreshes channels daily at a fixed hour.
     thread = threading.Thread(target=_scheduler_loop, daemon=True)
@@ -188,70 +203,166 @@ def _clean_records(
     return records
 
 
-def _analyze_new_jobs(records: list[dict[str, Any]]) -> None:
-    """
-    Analyze jobs that don't yet have a stored analysis, via DeepSeek.
+def _raw_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Every column JobSpy returned, row by row (same order as _clean_records)."""
+    if df is None or df.empty:
+        return []
+    return _clean_records(df, list(df.columns))
 
-    Runs in a small thread pool (network-bound). Skips silently if the
-    analyzer isn't configured (no API key). Individual failures are ignored
-    so a bad job doesn't sink the whole search.
-    """
+
+def _with_raw(df: pd.DataFrame, columns: list[str]) -> list[dict[str, Any]]:
+    """Records for storage, each carrying its full JobSpy row under ``_raw``."""
+    records = _clean_records(df, columns)
+    for rec, raw in zip(records, _raw_records(df)):
+        rec["_raw"] = raw
+    return records
+
+
+# --------------------------------------------------------------------------- #
+# AI analysis                                                                  #
+# --------------------------------------------------------------------------- #
+# Every job in the DB gets analyzed. A single background worker drains the
+# backlog (jobs without an analysis); refreshes just "kick" it. Each attempt,
+# failed ones included, is stored in analysis_runs.
+
+_analysis_state = threading.Lock()
+_analysis_running = False
+_analysis_requested = False
+
+
+def _analyze_one(rec: dict[str, Any], cv_text: str, cv_version_id: int | None, context_key: str) -> bool:
+    """Analyze one job, store the attempt, return True on success."""
+    base = {
+        "context_key": context_key,
+        "provider": analyzer.PROVIDER,
+        "model": analyzer.MODEL,
+        "prompt_version": analyzer.PROMPT_VERSION,
+        "cv_version_id": cv_version_id,
+    }
+    try:
+        out = analyzer.analyze_job(rec, cv_text)
+    except Exception as exc:
+        storage.add_analysis_run(
+            rec["job_url"], {**base, "status": "error", "error": f"{type(exc).__name__}: {exc}"[:1000]}
+        )
+        return False
+    storage.add_analysis_run(
+        rec["job_url"],
+        {
+            **base,
+            "status": "ok",
+            "result": out["result"],
+            "raw_response": out["raw"],
+            "input_tokens": out["input_tokens"],
+            "output_tokens": out["output_tokens"],
+            "latency_ms": out["latency_ms"],
+        },
+    )
+    storage.set_analysis(rec["job_url"], out["result"], context_key)
+    return True
+
+
+def _analyze_backlog(trigger: str) -> None:
+    """Analyze every job still missing an analysis, logging one event per run."""
     if not analyzer.is_configured():
         return
-
-    cv_text = storage.get_cv_text()
-    already = storage.get_analyzed_urls()
-    pending = [
-        r for r in records if r.get("job_url") and r["job_url"] not in already
-    ][:_MAX_ANALYSIS]
-    if not pending:
+    pending_total = storage.count_pending_analysis()
+    if not pending_total:
         return
+    log_id = storage.start_log({"kind": "analysis", "trigger": trigger, "found": pending_total})
+    t0 = time.monotonic()
+    ok = failed = 0
+    try:
+        cv_text = storage.get_cv_text()
+        cv_version_id = storage.current_cv_version_id()
+        context_key = storage.analysis_context()
+        seen: set[str] = set()
+        while True:
+            batch = storage.jobs_pending_analysis(50, exclude=seen)
+            if not batch:
+                break
+            seen.update(r["job_url"] for r in batch)
+            with ThreadPoolExecutor(max_workers=_ANALYSIS_WORKERS) as pool:
+                for success in pool.map(lambda r: _analyze_one(r, cv_text, cv_version_id, context_key), batch):
+                    ok += success
+                    failed += not success
+    except Exception as exc:
+        storage.finish_log(log_id, {
+            "status": "error", "error": str(exc)[:500], "analyzed": ok,
+            "analysis_failed": failed, "duration_ms": int((time.monotonic() - t0) * 1000),
+        })
+        raise
+    storage.finish_log(log_id, {
+        "status": "ok" if ok or not failed else "error",
+        "error": None if ok or not failed else "Tutte le analisi sono fallite: vedi analysis_runs",
+        "analyzed": ok, "analysis_failed": failed,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
 
-    def _work(rec: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+
+def _analysis_worker(trigger: str) -> None:
+    global _analysis_running, _analysis_requested
+    while True:
+        with _analysis_state:
+            if not _analysis_requested:
+                _analysis_running = False
+                return
+            _analysis_requested = False
         try:
-            result = analyzer.analyze_job(rec, cv_text)
-            return rec["job_url"], result
+            _analyze_backlog(trigger)
         except Exception:
-            return None
-
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(_work, r) for r in pending]
-        for fut in as_completed(futures):
-            out = fut.result()
-            if out is not None:
-                url, result = out
-                storage.set_analysis(url, result)
+            traceback.print_exc()
 
 
-def _refresh_channel(channel: dict[str, Any]) -> int:
-    """Scrape a channel's site+query, persist jobs, analyze the new ones.
+def _kick_analysis(trigger: str = "manual") -> None:
+    """Make sure the backlog gets analyzed soon, without blocking the caller."""
+    global _analysis_running, _analysis_requested
+    with _analysis_state:
+        _analysis_requested = True
+        if _analysis_running:
+            return
+        _analysis_running = True
+    threading.Thread(target=_analysis_worker, args=(trigger,), daemon=True).start()
+
+
+def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
+    """Scrape a channel's site+query and persist every job and sighting.
 
     Returns the number of jobs new to this channel. Scraping is serialized via
-    ``_scrape_lock`` so the scheduler and manual triggers don't overlap.
+    ``_scrape_lock`` so the scheduler and manual triggers don't overlap. The
+    run is logged; AI analysis of the new jobs happens in the background.
     """
-    with _scrape_lock:
-        df = search_site(
-            channel["site"],
-            channel["search_term"],
-            location=channel.get("location") or "",
-            distance_km=channel.get("distance_km") or 25,
-            results_wanted=channel.get("results_wanted") or 25,
-            hours_old=channel.get("hours_old"),
-            is_remote=bool(channel.get("is_remote")),
-        )
-
-    records = _clean_records(df, _FULL_COLUMNS)
-    new_count = storage.upsert_channel_jobs(channel["id"], records)
-
-    # Only analyze jobs that are new for this channel (bounds cost).
-    new_urls = {
-        r["job_url"]
-        for r in records
-        if r.get("job_url")
-    }
-    # _analyze_new_jobs already skips already-analyzed urls, so pass all records
-    # belonging to this channel; the analyzer cache prevents re-paying.
-    _analyze_new_jobs(records)
+    log_id = storage.start_log({
+        "kind": "refresh",
+        "trigger": trigger,
+        "channel_id": channel["id"],
+        "channel_name": channel.get("name") or channel["search_term"],
+        "site": channel["site"],
+    })
+    t0 = time.monotonic()
+    try:
+        with _scrape_lock:
+            df = search_site(
+                channel["site"],
+                channel["search_term"],
+                location=channel.get("location") or "",
+                distance_km=channel.get("distance_km") or 25,
+                results_wanted=channel.get("results_wanted") or 25,
+                hours_old=channel.get("hours_old"),
+                is_remote=bool(channel.get("is_remote")),
+            )
+            records = _with_raw(df, _FULL_COLUMNS)
+            new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
+    except Exception as exc:
+        storage.finish_log(log_id, {
+            "status": "error", "error": str(exc)[:500],
+            "duration_ms": int((time.monotonic() - t0) * 1000),
+        })
+        raise
+    storage.finish_log(log_id, {
+        "status": "ok", "found": len(records), "new_count": new_count,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
     return new_count
 
 
@@ -267,11 +378,10 @@ def _seconds_until_next_run() -> float:
 
 
 def _refresh_all_channels() -> None:
-    """Refresh every channel once, logging per-channel results."""
-    channels = storage.list_channels()
-    for channel in channels:
+    """Refresh every channel, analyze everything new, then clean the feed."""
+    for channel in storage.list_channels():
         try:
-            new_count = _refresh_channel(channel)
+            new_count = _refresh_channel(channel, trigger="scheduler")
             print(
                 "[scheduler] channel %s (%s): %d new"
                 % (channel["id"], channel["site"], new_count),
@@ -280,14 +390,30 @@ def _refresh_all_channels() -> None:
         except Exception:
             print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
             traceback.print_exc()
-    # Keep the feeds readable: drop jobs older than the retention window.
-    # Liked jobs are always preserved by purge_old_jobs.
+    _kick_analysis(trigger="scheduler")
+    _archive_stale(trigger="scheduler")
     try:
-        removed = storage.purge_old_jobs(_RETENTION_DAYS)
-        print("[scheduler] purged %d jobs older than %d days"
-              % (removed, _RETENTION_DAYS), flush=True)
+        print("[scheduler] backup: %s" % storage.backup_db("daily"), flush=True)
     except Exception:
         traceback.print_exc()
+
+
+def _archive_stale(days: int = _FEED_DAYS, trigger: str = "manual") -> int:
+    """Archive jobs left without a verdict for ``days`` and log it."""
+    t0 = time.monotonic()
+    log_id = storage.start_log({"kind": "archive", "trigger": trigger})
+    try:
+        archived = storage.archive_stale_jobs(days)
+    except Exception as exc:
+        storage.finish_log(log_id, {"status": "error", "error": str(exc)[:500]})
+        traceback.print_exc()
+        return 0
+    storage.finish_log(log_id, {
+        "status": "ok", "removed": archived,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
+    print("[scheduler] archived %d jobs without a verdict after %d days" % (archived, days), flush=True)
+    return archived
 
 
 def _scheduler_loop() -> None:
@@ -316,6 +442,7 @@ def run_search(req: SearchRequest) -> dict[str, Any]:
                 req.search_term,
                 results_wanted=req.results_wanted,
                 sites=req.sites,
+                hours_old=req.hours_old,
             )
         else:
             if not req.location.strip():
@@ -340,9 +467,8 @@ def run_search(req: SearchRequest) -> dict[str, Any]:
     _last_result = df if df is not None else pd.DataFrame()
 
     # Persist raw jobs (with description + rich columns) and analyze new ones.
-    analysis_records = _clean_records(_last_result, _FULL_COLUMNS)
-    storage.upsert_jobs(analysis_records)
-    _analyze_new_jobs(analysis_records)
+    storage.upsert_jobs(_with_raw(_last_result, _FULL_COLUMNS))
+    _kick_analysis()
 
     return {
         "count": int(len(_last_result)),
@@ -372,7 +498,7 @@ def export(format: Literal["csv", "xlsx"] = "csv") -> StreamingResponse:
     if _last_result is not None and not _last_result.empty:
         source = _last_result
     else:
-        source = pd.DataFrame(storage.get_all_jobs())
+        source = pd.DataFrame(storage.get_all_jobs(include_archived=True))
     if source is None or source.empty:
         raise HTTPException(status_code=404, detail="Nessun risultato da esportare: fai prima una ricerca.")
 
@@ -414,21 +540,33 @@ def export(format: Literal["csv", "xlsx"] = "csv") -> StreamingResponse:
     )
 
 
+def _jobs_envelope(jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Jobs plus the feedback/analysis of those jobs only (not the whole DB,
+    which made per-channel responses huge for MCP clients)."""
+    urls: set[str] = set()
+    for j in jobs:
+        urls.add(j["job_url"])
+        urls.update(j.get("duplicate_urls") or [])
+    feedback = storage.get_all_feedback()
+    analysis = storage.get_all_analysis()
+    return {
+        "applications": {u: a for u, a in storage.get_applications().items() if u in urls},
+        "count": len(jobs),
+        "jobs": jobs,
+        "feedback": {u: v for u, v in feedback.items() if u in urls},
+        "analysis": {u: v for u, v in analysis.items() if u in urls},
+        "analyzer_configured": analyzer.is_configured(),
+    }
+
+
 @app.get("/jobs")
-def list_jobs() -> dict[str, Any]:
+def list_jobs(archived: bool = False) -> dict[str, Any]:
     """
     Return all previously stored jobs (with feedback + analysis) without
     scraping. Used to repopulate the UI on page load / refresh so we don't
     re-run the scrape and AI analysis every time.
     """
-    jobs = storage.get_all_jobs()
-    return {
-        "count": len(jobs),
-        "jobs": jobs,
-        "feedback": storage.get_all_feedback(),
-        "analysis": storage.get_all_analysis(),
-        "analyzer_configured": analyzer.is_configured(),
-    }
+    return _jobs_envelope(storage.get_all_jobs(archived_only=archived))
 
 
 @app.get("/channels")
@@ -456,7 +594,8 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
     )
     channel = storage.get_channel(channel_id)
     try:
-        new_count = _refresh_channel(channel) if channel else 0
+        new_count = _refresh_channel(channel, trigger="create") if channel else 0
+        _kick_analysis(trigger="create")
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"Canale creato ma scraping fallito: {exc}"
@@ -483,6 +622,7 @@ def refresh_channel(channel_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Canale non trovato.")
     try:
         new_count = _refresh_channel(channel)
+        _kick_analysis()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Errore durante lo scraping: {exc}") from exc
     return {"ok": True, "id": channel_id, "new_count": new_count}
@@ -492,14 +632,7 @@ def refresh_channel(channel_id: int) -> dict[str, Any]:
 def channel_jobs(channel_id: int) -> dict[str, Any]:
     if storage.get_channel(channel_id) is None:
         raise HTTPException(status_code=404, detail="Canale non trovato.")
-    jobs = storage.get_channel_jobs(channel_id)
-    return {
-        "count": len(jobs),
-        "jobs": jobs,
-        "feedback": storage.get_all_feedback(),
-        "analysis": storage.get_all_analysis(),
-        "analyzer_configured": analyzer.is_configured(),
-    }
+    return _jobs_envelope(storage.get_channel_jobs(channel_id))
 
 
 @app.get("/job")
@@ -515,13 +648,15 @@ def get_job(url: str) -> dict[str, Any]:
 
 @app.get("/status")
 def status() -> dict[str, Any]:
-    """Report whether AI analysis is available and if a CV is loaded."""
+    """Report AI analysis state (key, CV, backlog) and the feed rule."""
     cv_text = storage.get_cv_text()
     return {
         "analyzer_configured": analyzer.is_configured(),
         "cv_loaded": bool(cv_text),
         "cv_chars": len(cv_text),
-        "max_analysis_per_search": _MAX_ANALYSIS,
+        "analysis_pending": storage.count_pending_analysis(),
+        "analysis_running": _analysis_running,
+        "feed_days": _FEED_DAYS,
     }
 
 
@@ -532,17 +667,331 @@ def analytics() -> dict[str, Any]:
 
 
 @app.post("/maintenance/recency")
-def set_recency(hours: int = _RETENTION_DAYS * 24) -> dict[str, Any]:
+def set_recency(hours: int = Query(_RECENCY_DAYS * 24, ge=1)) -> dict[str, Any]:
     """Set the recency window (hours_old) on every channel."""
     changed = storage.set_hours_old_all(hours)
     return {"ok": True, "channels_updated": changed, "hours_old": hours}
 
 
-@app.post("/maintenance/purge")
-def purge(days: int = _RETENTION_DAYS) -> dict[str, Any]:
-    """Purge jobs older than N days (liked jobs are always kept)."""
-    removed = storage.purge_old_jobs(days)
-    return {"ok": True, "removed": removed, "days": days}
+@app.post("/maintenance/archive")
+def archive(days: int = Query(_FEED_DAYS, ge=1)) -> dict[str, Any]:
+    """Archive jobs left without a verdict for N days (nothing is deleted)."""
+    archived = _archive_stale(days)
+    return {"ok": True, "archived": archived, "days": days}
+
+
+@app.post("/maintenance/analyze")
+def analyze_backlog() -> dict[str, Any]:
+    """Start analyzing every job that has no AI analysis yet (background)."""
+    _kick_analysis()
+    return {"ok": True, "pending": storage.count_pending_analysis()}
+
+
+@app.get("/logs")
+def logs(limit: int = 200) -> dict[str, Any]:
+    """Recent update events (channel refreshes, purges), newest first."""
+    return {"logs": storage.list_logs(max(1, min(limit, 1000)))}
+
+
+class ApplicationRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    status: Literal["to_apply", "applied", "contacted", "interview", "rejected", "offer", "withdrawn"]
+    applied_on: datetime.date | None = None
+    notes: str = Field("", max_length=10000)
+    next_step: str = Field("", max_length=2000)
+    follow_up_on: datetime.date | None = None
+    cv_label: str = Field("", max_length=300)
+    contact: str = Field("", max_length=500)
+    cv_id: int | None = None
+
+
+class ManualApplicationRequest(ApplicationRequest):
+    job_url: str = ""  # Ignored: server derives identity from url or a UUID.
+    title: str = Field(..., min_length=1, max_length=300)
+    company: str = Field(..., min_length=1, max_length=300)
+    url: HttpUrl | None = None
+    location: str = Field("", max_length=300)
+
+    @field_validator('title', 'company')
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Il campo non può essere vuoto')
+        return value.strip()
+
+
+class ApplicationNoteRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=5000)
+    occurred_on: datetime.date
+
+    @field_validator('text')
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Scrivi un aggiornamento')
+        return value.strip()
+
+
+@app.post("/applications/manual", status_code=201)
+def create_manual_application(req: ManualApplicationRequest) -> dict[str, Any]:
+    data = req.model_dump(mode='json', exclude={'job_url'})
+    try:
+        url = storage.create_manual_application(**data)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'ok': True, 'job_url': url}
+
+
+@app.get("/applications/history")
+def application_history(url: str) -> dict[str, Any]:
+    if url not in storage.get_applications():
+        raise HTTPException(status_code=404, detail='Candidatura non trovata')
+    return {'events': storage.application_events(url)}
+
+
+@app.post("/applications/notes", status_code=201)
+def add_application_note(req: ApplicationNoteRequest) -> dict[str, Any]:
+    try:
+        storage.add_application_note(req.job_url, req.text, req.occurred_on.isoformat())
+    except KeyError:
+        raise HTTPException(status_code=404, detail='Candidatura non trovata')
+    return {'ok': True}
+
+
+@app.get("/applications")
+def applications() -> dict[str, Any]:
+    tracked = storage.get_applications()
+    return _jobs_envelope([j for j in storage.get_all_jobs(include_archived=True)
+                           if j["job_url"] in tracked or any(u in tracked for u in j.get("duplicate_urls", []))])
+
+
+@app.post("/applications")
+def save_application(req: ApplicationRequest) -> dict[str, Any]:
+    data = req.model_dump(mode="json")
+    try:
+        storage.set_application(**data)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    return {"ok": True}
+
+
+@app.post("/jobs/restore")
+def restore_job(url: str) -> dict[str, Any]:
+    if storage.get_job(url) is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    storage.restore_job(url)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CV library
+# ---------------------------------------------------------------------------
+
+_MAX_CV_UPLOAD = 5 * 1024 * 1024
+
+
+class CvCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    markdown: str = Field(..., min_length=1, max_length=50000)
+
+
+class CvUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    markdown: str | None = Field(None, min_length=1, max_length=50000)
+    template: Literal["europass", "classic"] | None = None
+
+
+class CvTailorRequest(BaseModel):
+    job_url: str = Field(..., min_length=1)
+    base_cv_id: int | None = None  # None -> default CV
+
+
+class CvReviewRequest(BaseModel):
+    confirmed_facts: str = Field("", max_length=3000)
+    job_url: str | None = Field(None, max_length=3000)
+
+
+class CvPatch(BaseModel):
+    before: str = Field(..., min_length=1, max_length=500)
+    after: str = Field(..., min_length=1, max_length=750)
+    reason: str = Field("Correzione selezionata", max_length=600)
+
+
+class CvRevisionRequest(BaseModel):
+    source_hash: str = Field(..., min_length=64, max_length=64)
+    patches: list[CvPatch] = Field(..., min_length=1, max_length=6)
+
+
+def _cv_or_404(cv_id: int) -> dict[str, Any]:
+    cv = storage.get_cv(cv_id)
+    if cv is None:
+        raise HTTPException(status_code=404, detail="CV non trovato")
+    return cv
+
+
+@app.get("/cvs")
+def list_cvs() -> dict[str, Any]:
+    return {"cvs": storage.list_cvs()}
+
+
+@app.get("/cvs/{cv_id}")
+def get_cv(cv_id: int) -> dict[str, Any]:
+    return {"cv": _cv_or_404(cv_id)}
+
+
+@app.post("/cvs", status_code=201)
+def create_cv(req: CvCreateRequest) -> dict[str, Any]:
+    return {"id": storage.create_cv(req.name.strip(), req.markdown)}
+
+
+@app.post("/cvs/upload", status_code=201)
+async def upload_cv(request: Request, name: str = Query(..., min_length=1, max_length=200)) -> dict[str, Any]:
+    """Raw PDF body (Content-Type: application/pdf) -> text -> new base CV."""
+    body = await request.body()
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Carica un file PDF")
+    if len(body) > _MAX_CV_UPLOAD:
+        raise HTTPException(status_code=413, detail="PDF troppo grande (max 5 MB)")
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+        tmp.write(body)
+        tmp.flush()
+        try:
+            text = analyzer.extract_pdf_text(tmp.name)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="PDF illeggibile") from exc
+    if not text:
+        raise HTTPException(status_code=400, detail="Nessun testo nel PDF (è una scansione?)")
+    return {"id": storage.create_cv(name.strip(), text)}
+
+
+@app.patch("/cvs/{cv_id}")
+def update_cv(cv_id: int, req: CvUpdateRequest) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    storage.update_cv(cv_id, req.name.strip() if req.name else None, req.markdown, req.template)
+    if storage.get_cv(cv_id)["is_default"] and req.markdown is not None:
+        _kick_analysis(trigger="cv")
+    return {"ok": True}
+
+
+@app.post("/cvs/{cv_id}/default")
+def set_default_cv(cv_id: int) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    try:
+        storage.set_default_cv(cv_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _kick_analysis(trigger="cv")
+    return {"ok": True}
+
+
+@app.delete("/cvs/{cv_id}")
+def delete_cv(cv_id: int) -> dict[str, Any]:
+    _cv_or_404(cv_id)
+    try:
+        storage.delete_cv(cv_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/cvs/{cv_id}/pdf")
+def cv_pdf(cv_id: int) -> Response:
+    cv = _cv_or_404(cv_id)
+    pdf = cv_render.markdown_to_pdf(cv["markdown"], cv["template"])
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in cv["name"])[:80] or "cv"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{safe}.pdf"'})
+
+
+@app.post("/cvs/{cv_id}/review")
+def review_cv(cv_id: int, req: CvReviewRequest) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    job = storage.get_job(req.job_url) if req.job_url else None
+    if req.job_url and job is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    try:
+        return analyzer.review_cv(cv["markdown"], req.confirmed_facts, job)
+    except analyzer.AnalyzerNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Revisione non disponibile: riprova") from exc
+
+
+@app.get("/cvs/{cv_id}/preview")
+def cv_preview_info(cv_id: int) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    try:
+        return cv_render.preview_info(cv["markdown"], cv["template"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/cvs/{cv_id}/preview/{page_number}")
+def cv_preview_page(cv_id: int, page_number: int) -> Response:
+    cv = _cv_or_404(cv_id)
+    try:
+        image = cv_render.preview_page(cv["markdown"], cv["template"], page_number)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="Pagina non trovata") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(image, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/cvs/{cv_id}/revision", status_code=201)
+def save_cv_revision(cv_id: int, req: CvRevisionRequest) -> dict[str, Any]:
+    source = _cv_or_404(cv_id)
+    if req.source_hash != cv_review.source_hash(source["markdown"]):
+        raise HTTPException(status_code=409, detail="Il CV è cambiato: esegui di nuovo la revisione")
+    patches = [p.model_dump() for p in req.patches]
+    try:
+        markdown = cv_review.apply_patches(source["markdown"], patches)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if len(markdown) > 50000:
+        raise HTTPException(status_code=422, detail="CV troppo lungo")
+    new_id = storage.create_cv((source["name"][:180] + " · revisione"), markdown,
+                               kind=source["kind"], parent_id=cv_id, job_url=source["job_url"],
+                               changes=[p["reason"] for p in patches], template=source["template"])
+    return {"cv": storage.get_cv(new_id)}
+
+
+@app.post("/cvs/{cv_id}/check")
+def check_cv_pdf(cv_id: int) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    try:
+        return cv_render.check_pdf(cv["markdown"], cv["template"])
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Impossibile verificare il PDF esportato") from exc
+
+
+@app.post("/cvs/tailor", status_code=201)
+def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
+    """Generate a CV adapted to one job with the LLM, stored as a 'tailored' CV."""
+    job = storage.get_job(req.job_url)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    if req.base_cv_id is not None:
+        base = _cv_or_404(req.base_cv_id)
+    else:
+        default = next((c for c in storage.list_cvs() if c["is_default"]), None)
+        if default is None:
+            raise HTTPException(status_code=400, detail="Nessun CV caricato")
+        base = storage.get_cv(default["id"])
+    try:
+        out = analyzer.tailor_cv(job, base["markdown"])
+    except analyzer.AnalyzerNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    name = f"{base['name']} → {job.get('company') or ''} {job.get('title') or ''}".strip()[:200]
+    cv_id = storage.create_cv(name, out["markdown"], kind="tailored", parent_id=base["id"],
+                              job_url=req.job_url, changes=out["changes"], template=base["template"])
+    return {"cv": storage.get_cv(cv_id)}
 
 
 # Serve the SPA. Mounted last so API routes take precedence.

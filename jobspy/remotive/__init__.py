@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from datetime import datetime
 
+from jobspy.recency import within_recency
+
 from jobspy.model import (
     Scraper,
     ScraperInput,
@@ -81,10 +83,12 @@ class Remotive(Scraper):
         results_wanted = scraper_input.results_wanted or 15
 
         job_list: list[JobPost] = []
-        for raw in raw_jobs[:results_wanted]:
+        for raw in raw_jobs:
+            if len(job_list) >= results_wanted:
+                break
             try:
                 job_post = self._parse_job(raw)
-                if job_post:
+                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                     job_list.append(job_post)
             except Exception as e:
                 log.error(f"Remotive: error parsing job - {e}")
@@ -110,7 +114,7 @@ class Remotive(Scraper):
                 description = plain_converter(description)
 
         # candidate_required_location -> free-text location, kept as country string
-        candidate_location = raw.get("candidate_required_location") or "Worldwide"
+        candidate_location = raw.get("candidate_required_location") or "Remote — area non specificata"
         location_obj = Location(city=None, state=None, country=candidate_location)
 
         return JobPost(

@@ -305,3 +305,80 @@ Naukri specific
 ├── vacancy_count
 └── work_from_home_type
 ```
+
+
+## Workflow personale: Verona e remoto dall’Italia
+
+La webapp considera due alternative: presenza/ibrido vicino a Verona e remoto
+accessibile dall’Italia. I nuovi canali locali propongono `Verona, Veneto` e
+50 km (modificabili); `Solo remoto` rimane disattivato. I canali esistenti non
+vengono riscritti. Il raggio dipende dai filtri supportati dalla singola fonte;
+la valutazione AI non inventa distanze o tempi di percorrenza.
+
+L’analisi distingue compatibilità geografica, modalità, attendibilità e requisiti
+da verificare. Una sede mancante o un fuso orario non provano che sia possibile
+lavorare dall’Italia. CV o descrizione insufficienti producono un match non
+calcolabile, non un punteggio basso. L’area ammessa rimane visibile nelle schede.
+
+- Le copie vengono raggruppate solo con titolo, azienda, sede, modalità,
+  contratto e descrizione sufficientemente completa coincidenti. I giudizi già
+  salvati restano conservati; si possono correggere dalla vista Scartate.
+- Nuove mostra gli annunci scoperti nell’ultimo aggiornamento completato di
+  ciascun canale, anche quando il successivo aggiornamento trova zero risultati.
+- Le quattro fonti remote applicano la finestra temporale prima del limite dei
+  risultati. Le date disponibili hanno precisione giornaliera: il giorno limite
+  viene incluso; gli annunci senza data restano visibili.
+- Archivio consente di recuperare le offerte nascoste automaticamente. Il
+  ripristino concede una nuova finestra di revisione senza alterare il primo
+  avvistamento storico.
+- Candidature registra stato, data invio, note, prossimo passo e relativa data.
+  Le candidature salvate non vengono archiviate automaticamente. Il pulsante
+  Candidati apre solo l’annuncio: l’invio e lo stato si registrano manualmente.
+- Cambiando CV, modello o versione del prompt le analisi precedenti restano nello
+  storico, ma vengono ricalcolate e non sono mostrate come attuali. Il PDF montato
+  viene riletto al riavvio. Il primo avvio di questa versione aggiorna anche le
+  analisi precedenti secondo i nuovi criteri Verona/remoto Italia.
+
+### Aggiornamento e verifiche
+
+Il Dockerfile compila React in uno stage Node e copia il bundle nella webapp:
+non occorre più compilare e committare manualmente `webapp/static` prima del build.
+La migrazione SQLite è automatica e conserva i dati; prima dell’aggiornamento
+crea un backup `pre-workflow-v2-*` nel volume. I backup sullo stesso volume non
+sostituiscono una copia esterna per il recupero da perdita del disco.
+
+Test offline, con database temporanei e fonti simulate (nessuna chiamata AI):
+
+```sh
+python tests/test_workflow.py
+cd webapp/frontend
+npm ci
+npm run build
+```
+
+Il backend rimane monoutente: sul server usare il proxy autenticato esistente
+(es. Authentik) ed evitare accesso pubblico diretto alla porta del backend.
+Questa modifica non configura né verifica l’autenticazione del deployment.
+
+
+### Registro candidature e cronologia
+
+La pagina Candidature ha ricerca per ruolo/azienda/contatto, filtri di stato e
+scadenza, contatori e ordinamento per prossima azione. “Da seguire oggi” include
+le scadenze passate e odierne delle candidature non rifiutate/ritirate. Sono
+promemoria visibili nell’app, non notifiche automatiche.
+
+“Inserisci candidatura” registra offerte esterne anche senza link. I record
+manuali senza URL ricevono un identificatore interno e non hanno un pulsante
+per aprire l’annuncio. I record manuali non attivano analisi AI. Inserire un link
+già seguito restituisce un conflitto senza sovrascrivere la candidatura.
+
+Il dettaglio conserva nome/versione del CV, contatto, data invio, note e prossimo
+passo. “Candidatura inviata oggi” registra esplicitamente l’invio; aprire il link
+non cambia lo stato. È disponibile lo stato “Primo contatto”. Ogni modifica
+significativa registra i valori precedenti e nuovi nella cronologia; salvataggi
+identici non producono eventi. Si possono aggiungere aggiornamenti con data.
+
+Le candidature preesistenti vengono importate nella cronologia una sola volta;
+la migrazione crea prima un backup `pre-application-history-*`. Nessuna email
+viene letta/inviata e nessun portale viene sincronizzato da questa funzione.

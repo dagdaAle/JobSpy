@@ -16,6 +16,8 @@ from jobspy.remotive import Remotive
 from jobspy.remoteok import RemoteOK
 from jobspy.weworkremotely import WeWorkRemotely
 from jobspy.workingnomads import WorkingNomads
+from jobspy.subito import Subito
+from jobspy.inpa import InPA
 from jobspy.model import JobType, Location, JobResponse, Country
 from jobspy.model import SalarySource, ScraperInput, Site
 from jobspy.util import (
@@ -72,6 +74,8 @@ def scrape_jobs(
         Site.REMOTEOK: RemoteOK,
         Site.WEWORKREMOTELY: WeWorkRemotely,
         Site.WORKINGNOMADS: WorkingNomads,
+        Site.SUBITO: Subito,
+        Site.INPA: InPA,
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
