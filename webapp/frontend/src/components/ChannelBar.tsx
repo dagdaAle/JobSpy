@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,6 +36,7 @@ interface Props {
 export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelect }: Props) {
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState<Channel | null>(null);
+  const [editing, setEditing] = useState<Channel | null>(null);
   const del = useDeleteChannel();
   const refresh = useRefreshChannel();
 
@@ -120,6 +121,9 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
                         <DropdownMenuItem disabled={busy} onClick={() => runRefresh(ch)}>
                           <RefreshCw /> Aggiorna ora
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setEditing(ch)}>
+                          <Pencil /> Modifica filtri
+                        </DropdownMenuItem>
                         <DropdownMenuItem variant="destructive" onClick={() => setToDelete(ch)}>
                           <Trash2 /> Elimina canale
                         </DropdownMenuItem>
@@ -145,6 +149,12 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
       </div>
 
       <NewChannelDialog open={creating} onOpenChange={setCreating} sites={sites} />
+      <NewChannelDialog
+        open={editing !== null}
+        onOpenChange={(o) => !o && setEditing(null)}
+        sites={sites}
+        channel={editing}
+      />
 
       <Dialog open={toDelete !== null} onOpenChange={(o) => !o && setToDelete(null)}>
         <DialogContent>

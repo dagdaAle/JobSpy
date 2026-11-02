@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useCreateChannel } from "../hooks";
+import type { Channel, WorkMode } from "../api/types";
+import { useCreateChannel, useUpdateChannel } from "../hooks";
 import { siteLabel } from "../lib/format";
 
 const INITIAL = {
@@ -26,27 +27,85 @@ const INITIAL = {
   results_wanted: 50,
   hours_old: 336,
   is_remote: false,
+  include_keywords: "",
+  exclude_keywords: "senior, lead, staff, principal, stage, tirocinio",
+  exclude_companies: "",
+  work_mode: "any" as WorkMode,
 };
+
+const WORK_MODES: { value: WorkMode; label: string }[] = [
+  { value: "any", label: "Qualsiasi" },
+  { value: "remote_or_hybrid", label: "Remoto o ibrido" },
+  { value: "remote", label: "Solo remoto" },
+];
+
+const toList = (s: string) => s.split(",").map((w) => w.trim()).filter(Boolean);
+const fromList = (l?: string[]) => (l ?? []).join(", ");
+
+function fromChannel(ch: Channel): typeof INITIAL {
+  return {
+    name: ch.name ?? "",
+    site: ch.site,
+    search_term: ch.search_term,
+    location: ch.location ?? "",
+    distance_km: ch.distance_km ?? 25,
+    results_wanted: ch.results_wanted ?? 25,
+    hours_old: ch.hours_old ?? 0,
+    is_remote: ch.is_remote,
+    include_keywords: fromList(ch.include_keywords),
+    exclude_keywords: fromList(ch.exclude_keywords),
+    exclude_companies: fromList(ch.exclude_companies),
+    work_mode: ch.work_mode ?? "any",
+  };
+}
 
 export function NewChannelDialog({
   open,
   onOpenChange,
   sites,
+  channel,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sites: string[];
+  // Set = edit this channel instead of creating one.
+  channel?: Channel | null;
 }) {
   const create = useCreateChannel();
+  const update = useUpdateChannel();
+  const mutation = channel ? update : create;
   const [form, setForm] = useState(INITIAL);
+  useEffect(() => {
+    if (open) setForm(channel ? fromChannel(channel) : INITIAL);
+  }, [open, channel]);
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.search_term.trim()) return;
+    const body = {
+      ...form,
+      name: form.name.trim(),
+      hours_old: form.hours_old || null,
+      include_keywords: toList(form.include_keywords),
+      exclude_keywords: toList(form.exclude_keywords),
+      exclude_companies: toList(form.exclude_companies),
+    };
+    if (channel) {
+      update.mutate(
+        { id: channel.id, body },
+        {
+          onSuccess: () => {
+            toast.success("Canale aggiornato: i filtri valgono dal prossimo aggiornamento");
+            onOpenChange(false);
+          },
+        },
+      );
+      return;
+    }
     create.mutate(
-      { ...form, name: form.name.trim(), hours_old: form.hours_old || null },
+      body,
       {
         onSuccess: (r) => {
           toast.success(`Canale creato: ${r.new_count} offerte trovate`);
@@ -61,13 +120,15 @@ export function NewChannelDialog({
   const siteItems = sites.map((s) => ({ value: s, label: siteLabel(s) }));
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !create.isPending && onOpenChange(o)}>
+    <Dialog open={open} onOpenChange={(o) => !mutation.isPending && onOpenChange(o)}>
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit} className="grid gap-5">
           <DialogHeader>
-            <DialogTitle>Nuovo canale</DialogTitle>
+            <DialogTitle>{channel ? "Modifica canale" : "Nuovo canale"}</DialogTitle>
             <DialogDescription>
-              Un canale è una ricerca su un sito, aggiornata ogni mattina. La prima ricerca parte subito.
+              {channel
+                ? "Le offerte già trovate restano; i nuovi filtri valgono dal prossimo aggiornamento."
+                : "Un canale è una ricerca su un sito, aggiornata ogni mattina. La prima ricerca parte subito."}
             </DialogDescription>
           </DialogHeader>
 
@@ -137,23 +198,64 @@ export function NewChannelDialog({
               <span className="text-sm">Solo offerte da remoto</span>
               <Switch disabled={remoteBoard} checked={remoteBoard || form.is_remote} onCheckedChange={(v) => set("is_remote", v)} />
             </label>
+            <Field label="Parole richieste (titolo o testo, almeno una)" className="sm:col-span-2">
+              <Input
+                placeholder="es. python, llm, langchain, machine learning"
+                value={form.include_keywords}
+                onChange={(e) => set("include_keywords", e.target.value)}
+              />
+            </Field>
+            <Field label="Parole escluse (nel titolo)" className="sm:col-span-2">
+              <Input
+                placeholder="es. senior, lead, stage"
+                value={form.exclude_keywords}
+                onChange={(e) => set("exclude_keywords", e.target.value)}
+              />
+            </Field>
+            <Field label="Aziende escluse">
+              <Input
+                placeholder="es. agenzia x, randstad"
+                value={form.exclude_companies}
+                onChange={(e) => set("exclude_companies", e.target.value)}
+              />
+            </Field>
+            <Field label="Modalità di lavoro">
+              <Select
+                items={WORK_MODES}
+                value={form.work_mode}
+                onValueChange={(v) => v && set("work_mode", v as WorkMode)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WORK_MODES.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
 
           <p className="text-xs text-muted-foreground">
             Per Verona lascia “Solo offerte da remoto” disattivato: include presenza e ibrido.
             Sui siti remoti la sede indica i paesi ammessi; gli annunci senza data restano visibili.
+            Parole separate da virgola. “Modalità di lavoro” è un filtro sul testo dell’annuncio:
+            l’analisi AI verifica poi i paesi ammessi.
           </p>
-          {create.isError && (
-            <p className="text-sm text-destructive">{(create.error as Error).message}</p>
+          {mutation.isError && (
+            <p className="text-sm text-destructive">{(mutation.error as Error).message}</p>
           )}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>
               Annulla
             </Button>
-            <Button type="submit" disabled={create.isPending || !form.search_term.trim()}>
-              {create.isPending && <Loader2 className="animate-spin" />}
-              {create.isPending ? "Cerco le prime offerte…" : "Crea canale"}
+            <Button type="submit" disabled={mutation.isPending || !form.search_term.trim()}>
+              {mutation.isPending && <Loader2 className="animate-spin" />}
+              {channel ? "Salva" : create.isPending ? "Cerco le prime offerte…" : "Crea canale"}
             </Button>
           </DialogFooter>
         </form>

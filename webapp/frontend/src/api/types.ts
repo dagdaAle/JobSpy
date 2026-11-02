@@ -3,6 +3,7 @@
 export type Site = string;
 export type Verdict = "like" | "dislike";
 export type SearchMode = "italy" | "remote";
+export type WorkMode = "any" | "remote" | "remote_or_hybrid";
 
 export interface Job {
   site: Site;
@@ -45,6 +46,15 @@ export interface Analysis {
     location_reason: string;
     confidence: "high" | "medium" | "low";
     missing_requirements: string[];
+    // v3 analyses only; older ones lack these.
+    decision?: "apply" | "maybe" | "skip";
+    remote_scope?: "italy" | "eu" | "worldwide" | "restricted" | "unknown";
+    seniority?: "junior" | "mid" | "senior" | "lead" | "unknown";
+    stack?: string[];
+    salary?: string;
+    languages?: string[];
+    cv_match?: string[];
+    blockers?: string[];
   };
   relevance_score?: number | null;
   tags?: string[];
@@ -66,6 +76,10 @@ export interface Channel {
   results_wanted: number;
   hours_old: number | null;
   is_remote: boolean;
+  include_keywords?: string[];
+  exclude_keywords?: string[];
+  exclude_companies?: string[];
+  work_mode?: WorkMode;
   created_at?: string;
   // Counts only jobs still to review (no like/dislike yet).
   total_count?: number;
@@ -94,6 +108,10 @@ export interface ChannelRequest {
   results_wanted?: number;
   hours_old?: number | null;
   is_remote?: boolean;
+  include_keywords?: string[];
+  exclude_keywords?: string[];
+  exclude_companies?: string[];
+  work_mode?: WorkMode;
 }
 
 // Envelope shared by /search, /jobs and /channels/{id}/jobs.
