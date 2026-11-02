@@ -6,25 +6,14 @@ from datetime import datetime
 from jobspy.recency import within_recency
 
 from jobspy.model import (
+    CompensationInterval,
+    JobPost,
+    JobType,
+    Location,
     Scraper,
     ScraperInput,
-    Site,
-    JobPost,
-    JobResponse,
-    Location,
-    JobType,
-    Compensation,
-    CompensationInterval,
-    DescriptionFormat,
 )
-from jobspy.util import (
-    create_logger,
-    create_session,
-    markdown_converter,
-    plain_converter,
-)
-
-log = create_logger("Remotive")
+from jobspy.util import RequestsRotating, create_session, description_fields
 
 
 class Remotive(Scraper):
@@ -40,23 +29,11 @@ class Remotive(Scraper):
 
     base_url = "https://remotive.com/api/remote-jobs"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.REMOTIVE, proxies=proxies, ca_cert=ca_cert)
-        self.session = None
-        self.scraper_input = None
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
-        )
+        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0; +https://github.com/speedyapply/JobSpy)",
             "Accept": "application/json",
         }
@@ -65,19 +42,18 @@ class Remotive(Scraper):
         if scraper_input.search_term:
             params["search"] = scraper_input.search_term
 
-        log.info(f"Fetching Remotive jobs (search={scraper_input.search_term!r})")
+        self.log.info(f"Fetching Remotive jobs (search={scraper_input.search_term!r})")
         try:
             response = self.session.get(
                 self.base_url,
                 params=params,
                 headers=headers,
-                timeout=scraper_input.request_timeout,
             )
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            log.error(f"Remotive: request failed - {e}")
-            return JobResponse(jobs=[])
+            self.fail(f"Remotive: request failed - {e}")
+            return []
 
         raw_jobs = data.get("jobs", [])
         results_wanted = scraper_input.results_wanted or 15
@@ -91,10 +67,10 @@ class Remotive(Scraper):
                 if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                     job_list.append(job_post)
             except Exception as e:
-                log.error(f"Remotive: error parsing job - {e}")
+                self.log.error(f"Remotive: error parsing job - {e}")
                 continue
 
-        return JobResponse(jobs=job_list)
+        return job_list
 
     def _parse_job(self, raw: dict) -> JobPost | None:
         job_url = raw.get("url")
@@ -107,11 +83,9 @@ class Remotive(Scraper):
         # Description formatting to respect the requested format
         description = raw.get("description")
         if description:
-            fmt = self.scraper_input.description_format
-            if fmt == DescriptionFormat.MARKDOWN:
-                description = markdown_converter(description)
-            elif fmt == DescriptionFormat.PLAIN:
-                description = plain_converter(description)
+            description = description_fields(description, self.scraper_input.description_format)[
+                "description"
+            ]
 
         # candidate_required_location -> free-text location, kept as country string
         candidate_location = raw.get("candidate_required_location") or "Remote — area non specificata"
@@ -120,13 +94,13 @@ class Remotive(Scraper):
         return JobPost(
             id=job_id,
             title=title,
-            company_name=raw.get("company_name"),
+            company=raw.get("company_name"),
             company_logo=raw.get("company_logo_url") or raw.get("company_logo"),
             location=location_obj,
             job_url=job_url,
             description=description,
             job_type=self._parse_job_type(raw.get("job_type")),
-            compensation=self._parse_salary(raw.get("salary")),
+            **self._parse_salary(raw.get("salary")),
             date_posted=self._parse_date(raw.get("publication_date")),
             is_remote=True,
             company_industry=raw.get("category"),
@@ -148,17 +122,12 @@ class Remotive(Scraper):
         return [jt] if jt else None
 
     @staticmethod
-    def _parse_salary(salary_str: str | None) -> Compensation | None:
+    def _parse_salary(salary_str: str | None) -> dict:
         if not salary_str:
-            return None
+            return {}
         # Remotive salaries are free-form text (e.g. "$12K", "€40k - €60k").
         # Store as yearly interval without over-parsing the ambiguous string.
-        return Compensation(
-            interval=CompensationInterval.YEARLY,
-            min_amount=None,
-            max_amount=None,
-            currency=None,
-        )
+        return {"interval": CompensationInterval.YEARLY}
 
     @staticmethod
     def _parse_date(date_str: str | None):

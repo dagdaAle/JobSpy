@@ -5,24 +5,13 @@ from datetime import datetime
 from jobspy.recency import within_recency
 
 from jobspy.model import (
+    CompensationInterval,
+    JobPost,
+    Location,
     Scraper,
     ScraperInput,
-    Site,
-    JobPost,
-    JobResponse,
-    Location,
-    Compensation,
-    CompensationInterval,
-    DescriptionFormat,
 )
-from jobspy.util import (
-    create_logger,
-    create_session,
-    markdown_converter,
-    plain_converter,
-)
-
-log = create_logger("RemoteOK")
+from jobspy.util import RequestsRotating, create_session, description_fields
 
 
 class RemoteOK(Scraper):
@@ -37,39 +26,26 @@ class RemoteOK(Scraper):
 
     base_url = "https://remoteok.com/api"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.REMOTEOK, proxies=proxies, ca_cert=ca_cert)
-        self.session = None
-        self.scraper_input = None
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
-        )
+        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "Accept": "application/json",
         }
 
-        log.info("Fetching RemoteOK feed")
+        self.log.info("Fetching RemoteOK feed")
         try:
             response = self.session.get(
                 self.base_url,
                 headers=headers,
-                timeout=scraper_input.request_timeout,
             )
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            log.error(f"RemoteOK: request failed - {e}")
-            return JobResponse(jobs=[])
+            self.fail(f"RemoteOK: request failed - {e}")
+            return []
 
         # First element is legal/metadata; skip it.
         raw_jobs = data[1:] if data and isinstance(data, list) else []
@@ -88,10 +64,10 @@ class RemoteOK(Scraper):
                 if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                     job_list.append(job_post)
             except Exception as e:
-                log.error(f"RemoteOK: error parsing job - {e}")
+                self.log.error(f"RemoteOK: error parsing job - {e}")
                 continue
 
-        return JobResponse(jobs=job_list)
+        return job_list
 
     @staticmethod
     def _matches_search(raw: dict, search: str) -> bool:
@@ -114,11 +90,9 @@ class RemoteOK(Scraper):
 
         description = raw.get("description")
         if description:
-            fmt = self.scraper_input.description_format
-            if fmt == DescriptionFormat.MARKDOWN:
-                description = markdown_converter(description)
-            elif fmt == DescriptionFormat.PLAIN:
-                description = plain_converter(description)
+            description = description_fields(description, self.scraper_input.description_format)[
+                "description"
+            ]
 
         raw_location = raw.get("location") or "Remote"
         location_obj = Location(city=None, state=None, country=raw_location)
@@ -126,27 +100,27 @@ class RemoteOK(Scraper):
         return JobPost(
             id=job_id,
             title=title,
-            company_name=raw.get("company"),
+            company=raw.get("company"),
             company_logo=raw.get("company_logo") or raw.get("logo") or None,
             location=location_obj,
             job_url=job_url,
             description=description,
-            compensation=self._parse_salary(raw),
+            **self._parse_salary(raw),
             date_posted=self._parse_date(raw.get("date")),
             is_remote=True,
             skills=raw.get("tags") or None,
         )
 
     @staticmethod
-    def _parse_salary(raw: dict) -> Compensation | None:
+    def _parse_salary(raw: dict) -> dict:
         try:
             smin = int(raw.get("salary_min") or 0)
             smax = int(raw.get("salary_max") or 0)
         except (ValueError, TypeError):
-            return None
+            return {}
         if smin <= 0 and smax <= 0:
-            return None
-        return Compensation(
+            return {}
+        return dict(
             interval=CompensationInterval.YEARLY,
             min_amount=smin or None,
             max_amount=smax or None,

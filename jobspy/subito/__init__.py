@@ -6,18 +6,13 @@ import unicodedata
 from datetime import datetime
 
 from jobspy.model import (
-    Compensation,
     CompensationInterval,
     JobPost,
-    JobResponse,
     Location,
     Scraper,
     ScraperInput,
-    Site,
 )
-from jobspy.util import create_logger, create_session
-
-log = create_logger("Subito")
+from jobspy.util import TLSRotating, create_session
 
 # Province (lowercase, as typed by the user) -> Subito region slug. Subito's
 # search URL needs both: /annunci-{region}/vendita/offerte-lavoro/{province}/.
@@ -62,16 +57,6 @@ class Subito(Scraper):
 
     base_url = "https://www.subito.it"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.SUBITO, proxies=proxies, ca_cert=ca_cert)
-        self.user_agent = user_agent
-        self.scraper_input = None
-
     def _search_url(self, location: str | None) -> str:
         province = _slug((location or "").split(",")[0])
         region = _PROVINCE_REGION.get(province)
@@ -79,11 +64,11 @@ class Subito(Scraper):
             return f"{self.base_url}/annunci-{region}/vendita/offerte-lavoro/{province}/"
         return f"{self.base_url}/annunci-italia/vendita/offerte-lavoro/"
 
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        session = create_session(proxies=self.proxies, ca_cert=self.ca_cert, is_tls=True)
+        session = create_session(TLSRotating(scraper_input.proxies), scraper_input)
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/140.0 Safari/537.36",
             "Accept-Language": "it-IT,it;q=0.9",
@@ -98,14 +83,13 @@ class Subito(Scraper):
             if page > 1:
                 params["o"] = page
             try:
-                response = session.get(url, params=params, headers=headers,
-                                       timeout_seconds=scraper_input.request_timeout)
+                response = session.get(url, params=params, headers=headers)
                 if response.status_code != 200:
-                    log.error(f"Subito: HTTP {response.status_code} on page {page}")
+                    self.fail(f"Subito: HTTP {response.status_code} on page {page}")
                     break
                 ads = self._extract_ads(response.text)
             except Exception as e:
-                log.error(f"Subito: request failed - {e}")
+                self.fail(f"Subito: request failed - {e}")
                 break
             if not ads:
                 break
@@ -119,7 +103,7 @@ class Subito(Scraper):
                     if len(jobs) >= wanted:
                         break
             page += 1
-        return JobResponse(jobs=jobs)
+        return jobs
 
     @staticmethod
     def _extract_ads(html: str) -> list[dict]:
@@ -158,12 +142,12 @@ class Subito(Scraper):
         province = (geo.get("city") or {}).get("shortName")
         region = (geo.get("region") or {}).get("value")
 
-        salary = None
+        salary = {}
         price = self._feature(ad, "/price")
         if price:
             try:
                 amount = float(price.get("key"))
-                salary = Compensation(
+                salary = dict(
                     min_amount=amount, max_amount=amount, currency="EUR",
                     interval=CompensationInterval.YEARLY if amount >= 5000 else CompensationInterval.MONTHLY,
                 )
@@ -194,11 +178,11 @@ class Subito(Scraper):
         return JobPost(
             id=f"subito-{url.rsplit('-', 1)[-1].split('.')[0]}",
             title=title,
-            company_name=advertiser.get("name") or None,
+            company=advertiser.get("name") or None,
             job_url=url,
             location=Location(city=town, state=province or region, country="IT"),
             description=description or None,
-            compensation=salary,
+            **salary,
             date_posted=date_posted,
             is_remote=False,
             job_level=level["value"] if level else None,

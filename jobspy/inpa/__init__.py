@@ -3,19 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from jobspy.model import (
-    Compensation,
     CompensationInterval,
-    DescriptionFormat,
     JobPost,
-    JobResponse,
     Location,
     Scraper,
     ScraperInput,
-    Site,
 )
-from jobspy.util import create_logger, create_session, markdown_converter, plain_converter
-
-log = create_logger("inPA")
+from jobspy.util import RequestsRotating, create_session, description_fields
 
 # Province -> region, as inPA writes it in a notice's "sedi". Used to keep
 # region-wide notices (sedi == ["Veneto"]) when searching for a province.
@@ -49,23 +43,11 @@ class InPA(Scraper):
     api_url = "https://portale.inpa.gov.it/concorsi-smart/api/concorso-public-area/search-better"
     detail_url = "https://www.inpa.gov.it/bandi-e-avvisi/dettaglio-bando-avviso/?concorso_id={id}"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.INPA, proxies=proxies, ca_cert=ca_cert)
-        self.user_agent = user_agent
-        self.scraper_input = None
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
-        )
+        session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
         headers = {
-            "User-Agent": self.user_agent or "Mozilla/5.0 (compatible; JobSpy/1.0)",
+            "User-Agent": scraper_input.user_agent or "Mozilla/5.0 (compatible; JobSpy/1.0)",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -85,12 +67,11 @@ class InPA(Scraper):
                     params={"page": page, "size": 50},
                     json=body,
                     headers=headers,
-                    timeout=scraper_input.request_timeout,
                 )
                 response.raise_for_status()
                 data = response.json()
             except Exception as e:
-                log.error(f"inPA: request failed - {e}")
+                self.fail(f"inPA: request failed - {e}")
                 break
             notices = data.get("content") or []
             for notice in notices:
@@ -104,7 +85,7 @@ class InPA(Scraper):
             if data.get("last", True) or not notices:
                 break
             page += 1
-        return JobResponse(jobs=jobs)
+        return jobs
 
     @staticmethod
     def _in_area(notice: dict, location: str | None) -> bool:
@@ -132,11 +113,9 @@ class InPA(Scraper):
             title = f"{title} – {figure}"
 
         description = notice.get("descrizione") or notice.get("descrizioneBreve") or ""
-        fmt = self.scraper_input.description_format
-        if description and fmt == DescriptionFormat.MARKDOWN:
-            description = markdown_converter(description)
-        elif description and fmt == DescriptionFormat.PLAIN:
-            description = plain_converter(description)
+        description = description_fields(description, self.scraper_input.description_format)[
+            "description"
+        ]
 
         deadline = self._date(notice.get("dataScadenza"))
         facts = [
@@ -149,10 +128,10 @@ class InPA(Scraper):
         description = f"{header}\n\n{description}".strip() if header else description
 
         sedi = notice.get("sedi") or []
-        salary = None
+        salary = {}
         lo, hi = notice.get("salaryMin"), notice.get("salaryMax")
         if lo or hi:
-            salary = Compensation(
+            salary = dict(
                 min_amount=lo or hi, max_amount=hi or lo, currency="EUR",
                 interval=CompensationInterval.YEARLY,
             )
@@ -161,7 +140,7 @@ class InPA(Scraper):
         return JobPost(
             id=f"inpa-{notice['id']}",
             title=title,
-            company_name=enti[0] if enti else None,
+            company=enti[0] if enti else None,
             job_url=self.detail_url.format(id=notice["id"]),
             job_url_direct=notice.get("linkReindirizzamento") or None,
             location=Location(
@@ -170,7 +149,7 @@ class InPA(Scraper):
                 country="IT",
             ),
             description=description or None,
-            compensation=salary,
+            **salary,
             date_posted=self._date(notice.get("dataPubblicazione")),
             is_remote=False,
             company_industry="Pubblica Amministrazione",

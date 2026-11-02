@@ -145,8 +145,8 @@ class WorkflowTests(unittest.TestCase):
         ]}
         session = MagicMock(); session.get.return_value = response
         with patch('jobspy.remotive.create_session', return_value=session):
-            result = Remotive().scrape(ScraperInput(site_type=[], results_wanted=1, hours_old=24))
-        self.assertEqual([j.job_url for j in result.jobs], ['https://example.com/new'])
+            result = Remotive().scrape(ScraperInput(results_wanted=1, hours_old=24))
+        self.assertEqual([j.job_url for j in result], ['https://example.com/new'])
 
     def test_insufficient_data_is_not_a_zero_match(self):
         data = analyzer._normalize({'relevance_score': None, 'assessment': {'location_fit': 'invalid'}})
@@ -198,8 +198,8 @@ class WorkflowTests(unittest.TestCase):
             response = MagicMock(); response.json.return_value = payload
             session = MagicMock(); session.get.return_value = response
             with patch(f'jobspy.{module}.create_session', return_value=session):
-                result = cls().scrape(ScraperInput(site_type=[], results_wanted=1, hours_old=24))
-            self.assertEqual([j.job_url for j in result.jobs], ['https://example.com/new'])
+                result = cls().scrape(ScraperInput(results_wanted=1, hours_old=24))
+            self.assertEqual([j.job_url for j in result], ['https://example.com/new'])
         from email.utils import format_datetime
         response = MagicMock()
         response.content = f"""<rss><channel>
@@ -208,9 +208,9 @@ class WorkflowTests(unittest.TestCase):
         </channel></rss>""".encode()
         session = MagicMock(); session.get.return_value = response
         with patch('jobspy.weworkremotely.create_session', return_value=session):
-            result = WeWorkRemotely().scrape(ScraperInput(site_type=[], results_wanted=1, hours_old=24))
-        self.assertEqual([j.job_url for j in result.jobs], ['https://example.com/new'])
-        self.assertIn('non specificata', result.jobs[0].location.country)
+            result = WeWorkRemotely().scrape(ScraperInput(results_wanted=1, hours_old=24))
+        self.assertEqual([j.job_url for j in result], ['https://example.com/new'])
+        self.assertIn('non specificata', result[0].location.country)
 
     @patch.object(storage, '_now', return_value='2026-09-29 12:00:00')
     def test_application_history_is_atomic_and_ignores_noop_saves(self, _clock):

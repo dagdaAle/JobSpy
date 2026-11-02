@@ -15,9 +15,7 @@ pypdfium2>=4.30,<6
 # JobSpy library dependencies (installed from the local ../jobspy package)
 requests>=2.31.0
 beautifulsoup4>=4.12.2
-pandas>=2.1.0
-numpy>=1.26.0
+pandas>=2.1.2
 pydantic>=2.3.0
-tls-client>=1.0.1
+curl_cffi>=0.16.2
 markdownify>=1.1.0
-regex>=2024.4.28

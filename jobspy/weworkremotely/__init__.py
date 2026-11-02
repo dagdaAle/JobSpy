@@ -7,22 +7,12 @@ from email.utils import parsedate_to_datetime
 from jobspy.recency import within_recency
 
 from jobspy.model import (
+    JobPost,
+    Location,
     Scraper,
     ScraperInput,
-    Site,
-    JobPost,
-    JobResponse,
-    Location,
-    DescriptionFormat,
 )
-from jobspy.util import (
-    create_logger,
-    create_session,
-    markdown_converter,
-    plain_converter,
-)
-
-log = create_logger("WeWorkRemotely")
+from jobspy.util import RequestsRotating, create_session, description_fields
 
 
 class WeWorkRemotely(Scraper):
@@ -48,23 +38,11 @@ class WeWorkRemotely(Scraper):
         "remote-product-jobs",
     ]
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.WEWORKREMOTELY, proxies=proxies, ca_cert=ca_cert)
-        self.session = None
-        self.scraper_input = None
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        self.session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
-        )
+        self.session = create_session(RequestsRotating(scraper_input.proxies), scraper_input)
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0)",
             "Accept": "application/rss+xml, application/xml, text/xml",
         }
@@ -79,15 +57,15 @@ class WeWorkRemotely(Scraper):
             if len(job_list) >= results_wanted:
                 break
             url = f"{self.base_url}/{feed_slug}.rss"
-            log.info(f"Fetching WWR feed {feed_slug}")
+            self.log.info(f"Fetching WWR feed {feed_slug}")
             try:
                 response = self.session.get(
-                    url, headers=headers, timeout=scraper_input.request_timeout
+                    url, headers=headers
                 )
                 response.raise_for_status()
                 root = ET.fromstring(response.content)
             except Exception as e:
-                log.error(f"WeWorkRemotely: failed feed {feed_slug} - {e}")
+                self.fail(f"WeWorkRemotely: failed feed {feed_slug} - {e}")
                 continue
 
             for item in root.findall(".//item"):
@@ -98,10 +76,10 @@ class WeWorkRemotely(Scraper):
                     if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
                         job_list.append(job_post)
                 except Exception as e:
-                    log.error(f"WeWorkRemotely: error parsing item - {e}")
+                    self.log.error(f"WeWorkRemotely: error parsing item - {e}")
                     continue
 
-        return JobResponse(jobs=job_list)
+        return job_list
 
     def _parse_item(
         self, item, feed_slug: str, search: str, seen_urls: set[str]
@@ -128,11 +106,9 @@ class WeWorkRemotely(Scraper):
 
         description = self._text(item, "description")
         if description:
-            fmt = self.scraper_input.description_format
-            if fmt == DescriptionFormat.MARKDOWN:
-                description = markdown_converter(description)
-            elif fmt == DescriptionFormat.PLAIN:
-                description = plain_converter(description)
+            description = description_fields(description, self.scraper_input.description_format)[
+                "description"
+            ]
 
         region = self._text(item, "region") or "Remote — area non specificata"
         category = self._text(item, "category")
@@ -143,7 +119,7 @@ class WeWorkRemotely(Scraper):
         return JobPost(
             id=job_id,
             title=position,
-            company_name=company_name,
+            company=company_name,
             location=location_obj,
             job_url=link,
             description=description,
