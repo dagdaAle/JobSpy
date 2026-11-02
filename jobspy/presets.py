@@ -49,7 +49,7 @@ def search_italy(
     hours_old: int | None = None,
     include_linkedin: bool = True,
     sites: list[str] | None = None,
-    **kwargs,
+    **kwargs: Any,  # noqa: ANN401
 ) -> pd.DataFrame:
     """
     Search Italian job boards around a city, with sensible Italian defaults.
@@ -88,7 +88,7 @@ def search_site(
     results_wanted: int = 25,
     hours_old: int | None = None,
     is_remote: bool = False,
-    **kwargs,
+    **kwargs: Any,  # noqa: ANN401
 ) -> pd.DataFrame:
     """
     Scrape a **single** job board with one query, returning the full DataFrame
@@ -153,7 +153,7 @@ def search_remote(
     results_wanted: int = 25,
     sites: list[str] | None = None,
     include_indeed_remote: bool = False,
-    **kwargs,
+    **kwargs: Any,  # noqa: ANN401
 ) -> pd.DataFrame:
     """
     Search remote-only job boards (Remotive, RemoteOK, WeWorkRemotely,
@@ -192,4 +192,5 @@ def search_remote(
     non_empty = [f for f in frames if f is not None and not f.empty]
     if not non_empty:
         return pd.DataFrame()
-    return pd.concat(non_empty, ignore_index=True)
+    result: pd.DataFrame = pd.concat(non_empty, ignore_index=True)
+    return result

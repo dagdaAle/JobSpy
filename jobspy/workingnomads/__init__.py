@@ -1,26 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any
 
-from jobspy.recency import within_recency
-
+from jobspy.common import description_text, with_retry
 from jobspy.model import (
+    JobPost,
+    Location,
     Scraper,
     ScraperInput,
-    Site,
-    JobPost,
-    JobResponse,
-    Location,
-    DescriptionFormat,
 )
-from jobspy.util import (
-    create_logger,
-    create_session,
-    markdown_converter,
-    plain_converter,
-)
-
-log = create_logger("WorkingNomads")
+from jobspy.recency import within_recency
+from jobspy.util import RequestsRotating, create_session
 
 
 class WorkingNomads(Scraper):
@@ -36,39 +27,28 @@ class WorkingNomads(Scraper):
 
     base_url = "https://www.workingnomads.com/api/exposed_jobs/"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.WORKINGNOMADS, proxies=proxies, ca_cert=ca_cert)
-        self.session = None
-        self.scraper_input = None
-
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
         self.session = create_session(
-            proxies=self.proxies, ca_cert=self.ca_cert, is_tls=False, has_retry=True
+            with_retry(RequestsRotating(scraper_input.proxies)), scraper_input
         )
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (compatible; JobSpy/1.0)",
             "Accept": "application/json",
         }
 
-        log.info("Fetching Working Nomads feed")
+        self.log.info("Fetching Working Nomads feed")
         try:
             response = self.session.get(
                 self.base_url,
                 headers=headers,
-                timeout=scraper_input.request_timeout,
             )
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            log.error(f"WorkingNomads: request failed - {e}")
-            return JobResponse(jobs=[])
+            self.fail(f"WorkingNomads: request failed - {e}")
+            return []
 
         raw_jobs = data if isinstance(data, list) else []
         search = (scraper_input.search_term or "").strip().lower()
@@ -82,16 +62,18 @@ class WorkingNomads(Scraper):
                 continue
             try:
                 job_post = self._parse_job(raw)
-                if job_post and within_recency(job_post.date_posted, scraper_input.hours_old):
+                if job_post and within_recency(
+                    job_post.date_posted, scraper_input.hours_old
+                ):
                     job_list.append(job_post)
             except Exception as e:
-                log.error(f"WorkingNomads: error parsing job - {e}")
+                self.log.error(f"WorkingNomads: error parsing job - {e}")
                 continue
 
-        return JobResponse(jobs=job_list)
+        return job_list
 
     @staticmethod
-    def _matches_search(raw: dict, search: str) -> bool:
+    def _matches_search(raw: dict[str, Any], search: str) -> bool:
         haystack = " ".join(
             [
                 str(raw.get("title", "")),
@@ -102,7 +84,7 @@ class WorkingNomads(Scraper):
         ).lower()
         return search in haystack
 
-    def _parse_job(self, raw: dict) -> JobPost | None:
+    def _parse_job(self, raw: dict[str, Any]) -> JobPost | None:
         job_url = raw.get("url")
         title = raw.get("title")
         if not job_url or not title:
@@ -112,11 +94,9 @@ class WorkingNomads(Scraper):
 
         description = raw.get("description")
         if description:
-            fmt = self.scraper_input.description_format
-            if fmt == DescriptionFormat.MARKDOWN:
-                description = markdown_converter(description)
-            elif fmt == DescriptionFormat.PLAIN:
-                description = plain_converter(description)
+            description = description_text(
+                description, self.scraper_input.description_format
+            )
 
         raw_location = raw.get("location") or "Remote"
         location_obj = Location(city=None, state=None, country=raw_location)
@@ -124,7 +104,7 @@ class WorkingNomads(Scraper):
         return JobPost(
             id=job_id,
             title=title,
-            company_name=raw.get("company_name"),
+            company=raw.get("company_name"),
             location=location_obj,
             job_url=job_url,
             description=description,
@@ -135,7 +115,7 @@ class WorkingNomads(Scraper):
         )
 
     @staticmethod
-    def _parse_tags(tags) -> list[str] | None:
+    def _parse_tags(tags: object) -> list[str] | None:
         if not tags:
             return None
         if isinstance(tags, list):
@@ -146,7 +126,7 @@ class WorkingNomads(Scraper):
         return None
 
     @staticmethod
-    def _parse_date(date_str: str | None):
+    def _parse_date(date_str: str | None) -> date | None:
         if not date_str:
             return None
         try:

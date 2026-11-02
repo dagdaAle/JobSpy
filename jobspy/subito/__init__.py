@@ -4,35 +4,44 @@ import json
 import re
 import unicodedata
 from datetime import datetime
+from typing import Any
+
+from curl_cffi.requests import RetryStrategy
 
 from jobspy.model import (
-    Compensation,
     CompensationInterval,
     JobPost,
-    JobResponse,
     Location,
     Scraper,
     ScraperInput,
-    Site,
 )
-from jobspy.util import create_logger, create_session
-
-log = create_logger("Subito")
+from jobspy.util import TLSRotating, create_session
 
 # Province (lowercase, as typed by the user) -> Subito region slug. Subito's
 # search URL needs both: /annunci-{region}/vendita/offerte-lavoro/{province}/.
 # Unknown places fall back to a nationwide search.
 _PROVINCE_REGION = {
     # Veneto
-    "verona": "veneto", "vicenza": "veneto", "padova": "veneto", "venezia": "veneto",
-    "treviso": "veneto", "rovigo": "veneto", "belluno": "veneto",
+    "verona": "veneto",
+    "vicenza": "veneto",
+    "padova": "veneto",
+    "venezia": "veneto",
+    "treviso": "veneto",
+    "rovigo": "veneto",
+    "belluno": "veneto",
     # Lombardia
-    "milano": "lombardia", "brescia": "lombardia", "mantova": "lombardia",
-    "bergamo": "lombardia", "cremona": "lombardia",
+    "milano": "lombardia",
+    "brescia": "lombardia",
+    "mantova": "lombardia",
+    "bergamo": "lombardia",
+    "cremona": "lombardia",
     # Trentino-Alto Adige
-    "trento": "trentino-alto-adige", "bolzano": "trentino-alto-adige",
+    "trento": "trentino-alto-adige",
+    "bolzano": "trentino-alto-adige",
     # Emilia-Romagna
-    "bologna": "emilia-romagna", "modena": "emilia-romagna", "ferrara": "emilia-romagna",
+    "bologna": "emilia-romagna",
+    "modena": "emilia-romagna",
+    "ferrara": "emilia-romagna",
 }
 
 _CONTRACT = {
@@ -62,28 +71,22 @@ class Subito(Scraper):
 
     base_url = "https://www.subito.it"
 
-    def __init__(
-        self,
-        proxies: list[str] | str | None = None,
-        ca_cert: str | None = None,
-        user_agent: str | None = None,
-    ):
-        super().__init__(Site.SUBITO, proxies=proxies, ca_cert=ca_cert)
-        self.user_agent = user_agent
-        self.scraper_input = None
-
     def _search_url(self, location: str | None) -> str:
         province = _slug((location or "").split(",")[0])
         region = _PROVINCE_REGION.get(province)
         if region:
-            return f"{self.base_url}/annunci-{region}/vendita/offerte-lavoro/{province}/"
+            return (
+                f"{self.base_url}/annunci-{region}/vendita/offerte-lavoro/{province}/"
+            )
         return f"{self.base_url}/annunci-italia/vendita/offerte-lavoro/"
 
-    def scrape(self, scraper_input: ScraperInput) -> JobResponse:
+    def scrape(self, scraper_input: ScraperInput) -> list[JobPost]:
         self.scraper_input = scraper_input
-        session = create_session(proxies=self.proxies, ca_cert=self.ca_cert, is_tls=True)
+        session = create_session(TLSRotating(scraper_input.proxies), scraper_input)
+        # Retry network errors with backoff (curl_cffi's own mechanism).
+        session.retry = RetryStrategy(count=3, delay=1, backoff="exponential")
         headers = {
-            "User-Agent": self.user_agent
+            "User-Agent": scraper_input.user_agent
             or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/140.0 Safari/537.36",
             "Accept-Language": "it-IT,it;q=0.9",
@@ -94,18 +97,17 @@ class Subito(Scraper):
         seen: set[str] = set()
         page = 1
         while len(jobs) < wanted and page <= 10:
-            params = {"q": scraper_input.search_term or ""}
+            params: dict[str, str | int] = {"q": scraper_input.search_term or ""}
             if page > 1:
                 params["o"] = page
             try:
-                response = session.get(url, params=params, headers=headers,
-                                       timeout_seconds=scraper_input.request_timeout)
+                response = session.get(url, params=params, headers=headers)
                 if response.status_code != 200:
-                    log.error(f"Subito: HTTP {response.status_code} on page {page}")
+                    self.fail(f"Subito: HTTP {response.status_code} on page {page}")
                     break
                 ads = self._extract_ads(response.text)
             except Exception as e:
-                log.error(f"Subito: request failed - {e}")
+                self.fail(f"Subito: request failed - {e}")
                 break
             if not ads:
                 break
@@ -119,22 +121,24 @@ class Subito(Scraper):
                     if len(jobs) >= wanted:
                         break
             page += 1
-        return JobResponse(jobs=jobs)
+        return jobs
 
     @staticmethod
-    def _extract_ads(html: str) -> list[dict]:
+    def _extract_ads(html: str) -> list[dict[str, Any]]:
         match = _NEXT_DATA_RE.search(html)
         if not match:
             return []
         try:
-            items = json.loads(match.group(1))["props"]["pageProps"]["initialState"]["items"]
+            items = json.loads(match.group(1))["props"]["pageProps"]["initialState"][
+                "items"
+            ]
         except (KeyError, TypeError, ValueError):
             return []
         ads = items.get("originalList") or []
         return [a.get("item", a) for a in ads if isinstance(a, dict)]
 
     @staticmethod
-    def _matches(ad: dict, search_term: str | None) -> bool:
+    def _matches(ad: dict[str, Any], search_term: str | None) -> bool:
         """Subito's own search is loose ("programmatore" also returns
         "PROGRAMMA GOL" sales jobs): keep an ad only if every word of the
         query appears in its title or text."""
@@ -143,11 +147,11 @@ class Subito(Scraper):
         return all(w in text for w in words)
 
     @staticmethod
-    def _feature(ad: dict, key: str) -> dict | None:
+    def _feature(ad: dict[str, Any], key: str) -> dict[str, Any] | None:
         values = ((ad.get("features") or {}).get(key) or {}).get("values") or []
         return values[0] if values else None
 
-    def _parse(self, ad: dict) -> JobPost | None:
+    def _parse(self, ad: dict[str, Any]) -> JobPost | None:
         title = (ad.get("subject") or "").strip()
         url = (ad.get("urls") or {}).get("default")
         if not title or not url:
@@ -158,14 +162,18 @@ class Subito(Scraper):
         province = (geo.get("city") or {}).get("shortName")
         region = (geo.get("region") or {}).get("value")
 
-        salary = None
+        salary: dict[str, Any] = {}
         price = self._feature(ad, "/price")
         if price:
             try:
-                amount = float(price.get("key"))
-                salary = Compensation(
-                    min_amount=amount, max_amount=amount, currency="EUR",
-                    interval=CompensationInterval.YEARLY if amount >= 5000 else CompensationInterval.MONTHLY,
+                amount = float(price.get("key") or "")
+                salary = dict(
+                    min_amount=amount,
+                    max_amount=amount,
+                    currency="EUR",
+                    interval=CompensationInterval.YEARLY
+                    if amount >= 5000
+                    else CompensationInterval.MONTHLY,
                 )
             except (TypeError, ValueError):
                 pass
@@ -178,7 +186,11 @@ class Subito(Scraper):
 
         extra = [
             f"{label}: {v['value']}"
-            for label, v in (("Contratto", contract), ("Orario", hours), ("Livello", level))
+            for label, v in (
+                ("Contratto", contract),
+                ("Orario", hours),
+                ("Livello", level),
+            )
             if v
         ]
         description = (ad.get("body") or "").strip()
@@ -187,21 +199,25 @@ class Subito(Scraper):
 
         date_posted = None
         try:
-            date_posted = datetime.strptime(ad.get("date", ""), "%Y-%m-%d %H:%M:%S").date()
+            date_posted = datetime.strptime(
+                ad.get("date", ""), "%Y-%m-%d %H:%M:%S"
+            ).date()
         except ValueError:
             pass
 
         return JobPost(
             id=f"subito-{url.rsplit('-', 1)[-1].split('.')[0]}",
             title=title,
-            company_name=advertiser.get("name") or None,
+            company=advertiser.get("name") or None,
             job_url=url,
             location=Location(city=town, state=province or region, country="IT"),
             description=description or None,
-            compensation=salary,
+            **salary,
             date_posted=date_posted,
             is_remote=False,
             job_level=level["value"] if level else None,
             company_industry=sector["value"] if sector else None,
-            listing_type=_CONTRACT.get(contract["key"], contract["value"]) if contract else None,
+            listing_type=_CONTRACT.get(contract["key"], contract["value"])
+            if contract
+            else None,
         )
