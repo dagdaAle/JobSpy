@@ -18,7 +18,7 @@ Tutto il resto di `jobspy/` è identico a upstream.
 
 ## Nostre fonti (cartelle nuove, non esistono upstream)
 
-`jobspy/inpa/`, `subito/`, `remotive/`, `remoteok/`, `weworkremotely/`, `workingnomads/`, più `jobspy/presets.py` e `jobspy/recency.py`.
+`jobspy/inpa/`, `subito/`, `remotive/`, `remoteok/`, `weworkremotely/`, `workingnomads/`, più `jobspy/presets.py`, `jobspy/recency.py` e `jobspy/common.py` (retry e descrizione, condivisi dalle fonti nostre).
 Ogni fonte estende `Scraper`, ritorna `list[JobPost]` e usa `RequestsRotating` / `TLSRotating` + `create_session` da `jobspy/util.py`.
 
 ## Prossimo allineamento
@@ -30,4 +30,4 @@ Ogni fonte estende `Scraper`, ritorna `list[JobPost]` e usa `RequestsRotating` /
 4. Allinea `webapp/requirements.txt` alle `dependencies` del nuovo `pyproject.toml` (il Dockerfile installa con `--no-deps`).
 5. Se il merge porta workflow di pubblicazione, disattivali.
 6. Test: `cd webapp && PYTHONPATH=.. python -m unittest discover -s ../tests`
-7. Smoke dal vivo, una chiamata per sito con `results_wanted=3`: linkedin, indeed, inpa, remotive.
+7. Smoke dal vivo, una chiamata per sito con `results_wanted=3`: linkedin, indeed, inpa, remotive, subito.

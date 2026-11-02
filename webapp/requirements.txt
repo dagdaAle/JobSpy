@@ -17,5 +17,5 @@ requests>=2.31.0
 beautifulsoup4>=4.12.2
 pandas>=2.1.2
 pydantic>=2.3.0
-curl_cffi>=0.16.2
+curl_cffi>=0.17.0  # jobspy/subito needs RetryStrategy
 markdownify>=1.1.0
