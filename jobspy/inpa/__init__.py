@@ -42,8 +42,8 @@ class InPA(Scraper):
     returns every open notice in the area. Only notices still open
     for applications are returned. The API has no reliable place filter, so
     ``location`` is applied client-side on the notice's "sedi": a notice is
-    kept when it names the province, is region-wide for that province's
-    region, or is national.
+    kept when it names the province or is region-wide for that province's
+    region; national notices are dropped.
     """
 
     api_url = "https://portale.inpa.gov.it/concorsi-smart/api/concorso-public-area/search-better"
@@ -115,8 +115,6 @@ class InPA(Scraper):
         if not sedi:
             # No place given: can't tell where it is, so don't show it.
             return False
-        if any(s in _NATIONAL for s in sedi):
-            return True
         if place in sedi:
             return True
         region = _PROVINCE_REGION.get(place, place)
