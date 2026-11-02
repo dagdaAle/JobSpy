@@ -1,7 +1,7 @@
 # ADR 005 — L'LLM valuta, ma "non so" resta non noto; cache per contesto
 
 - Data: 02/11/2026
-- Stato: in vigore (descrive il codice di oggi)
+- Stato: in vigore; la parte sul punteggio è superata da [007](007-score-a-componenti.md) quando il piano 03 è in produzione
 
 ## Contesto
 

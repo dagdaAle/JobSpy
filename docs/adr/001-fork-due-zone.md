@@ -23,4 +23,4 @@ La repo è un fork pubblico di `speedyapply/JobSpy`. Sopra la libreria di scrapi
 ## Conseguenze
 
 - Prima di ogni allineamento con upstream si controlla `jobspy/model.py`: `webapp/` ne usa le colonne.
-- Oggi il fork è 40 commit dietro: l'allineamento è un lavoro a sé (piano 01, opzionale).
+- Il fork resta allineato a upstream (decisione di Ale, 02/11/2026): oggi è 40 commit dietro, l'allineamento è nel piano 01.

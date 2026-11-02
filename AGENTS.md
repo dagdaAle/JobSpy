@@ -1,7 +1,7 @@
 # AGENTS.md — JobSpy
 
 Fork di [`speedyapply/JobSpy`](https://github.com/speedyapply/JobSpy) con una webapp personale sopra: canali di ricerca
-offerte, dedup e storico, valutazione LLM (DeepSeek) contro il CV, candidature e libreria CV.
+offerte (Verona e dintorni, bandi PA, remoto), dedup e storico, tagging e valutazione con DeepSeek, candidature assistite e libreria CV.
 FastAPI + SQLite + React, un solo container sul server di casa dietro Authentik (`jobspy.intecha.dev`).
 Hermes lo usa via MCP (`intecha-mcp`, server `jobspy` / `jobspy_write`).
 
@@ -12,7 +12,7 @@ Prima di toccare il codice leggi:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): due zone, architettura di arrivo, modello dati, flussi, MCP
 - [docs/DESIGN.md](docs/DESIGN.md): UI, pagine, stati, accessibilità
 - [docs/adr/](docs/adr/): decisioni prese, da non rimettere in discussione senza motivo nuovo
-- [docs/plans/](docs/plans/): piani per fase (01 consolidare → 05 qualità AI)
+- [docs/plans/](docs/plans/): piani per fase (01 consolidare → 07 qualità AI)
 
 ## Comandi
 
@@ -30,7 +30,8 @@ cd webapp/frontend && npm ci && npm run dev              # frontend su :5173
 - **Verdetti**: `feedback` e `feedback_events` sono l'unico dato non rigenerabile. Backup coerente prima di ogni migrazione o deploy che tocca il DB.
 - **Un solo processo** ([adr/003](docs/adr/003-sqlite-un-processo.md)): niente worker o processi in più che scrivono sul DB.
 - **Fonti** ([adr/004](docs/adr/004-politica-fonti.md)): niente login, CAPTCHA o proxy a rotazione; mai i siti veri nei test.
-- **LLM** ([adr/005](docs/adr/005-llm-valuta-null-se-non-sa.md)): ciò che non si sa resta `null`/`unknown`; `PROMPT_VERSION` si incrementa a ogni cambio di prompt.
+- **LLM** ([adr/005](docs/adr/005-llm-valuta-null-se-non-sa.md), [006](docs/adr/006-tag-a-vocabolario-controllato.md), [007](docs/adr/007-score-a-componenti.md)): l'LLM estrae fatti e tag dal vocabolario con evidenza; la valutazione è codice. Ciò che non si sa resta `null`/non noto; la versione del prompt si incrementa a ogni cambio.
+- **Candidature** ([adr/008](docs/adr/008-candidatura-assistita.md), [009](docs/adr/009-candidature-una-fonte.md)): il bot precompila, l'invio è sempre di Ale; lo stato vive solo in JobSpy.
 - **MCP**: ogni nuova operazione dell'API ha il suo tool in `intecha-mcp`, o un'esclusione motivata.
 - **Lingua**: codice, commenti e commit in inglese (è un fork); `docs/` in italiano come le app sorelle.
 - `TZ=Europe/Rome` nel compose non si toglie; il workflow PyPI di upstream non si attiva.

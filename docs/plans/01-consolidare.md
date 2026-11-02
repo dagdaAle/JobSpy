@@ -1,12 +1,12 @@
-# Consolidare PR, dati e canali — piano di implementazione
+# Consolidare PR, upstream, dati e fonti — piano di implementazione
 
 > **Per agenti:** sotto-skill richiesta: superpowers:subagent-driven-development (consigliata) oppure
 > superpowers:executing-plans. I passi usano le checkbox (`- [ ]`).
 
-**Obiettivo:** niente lavoro fermo su branch, dati al sicuro fuori dal server, canali allineati all'obiettivo.
+**Obiettivo:** niente lavoro fermo su branch, fork allineato, dati al sicuro fuori dal server, inPA solo su Verona.
 Nessun cambio di architettura.
 
-**Spec:** [PRODUCT.md](../PRODUCT.md) (decisioni 1-5), [adr/003](../adr/003-sqlite-un-processo.md).
+**Spec:** [PRODUCT.md](../PRODUCT.md) (decisioni prese, decisioni 1-4), [adr/001](../adr/001-fork-due-zone.md), [adr/003](../adr/003-sqlite-un-processo.md).
 
 ## PR aperte
 
@@ -14,22 +14,33 @@ Nessun cambio di architettura.
 - [ ] Rebase di [#10](https://github.com/dagdaAle/JobSpy/pull/10) su `main`, test verdi (`cd webapp && python -m unittest discover -s ../tests`), merge.
       Chiudere [#9](https://github.com/dagdaAle/JobSpy/pull/9) come inclusa in #10.
 - [ ] Prima del deploy: backup coerente di `/data/feedback.db`. Dopo: seguire la rianalisi nei log, annotare token e tempo.
-- [ ] Aggiornare [#1](https://github.com/dagdaAle/JobSpy/pull/1): `CLAUDE.md` rimanda ad `AGENTS.md` (numeri del 18/09 superati), merge.
-- [ ] Cancellare i branch locali già mergiati (`redesign`, `feat/cv-module`, `bug-fix/collapsible-channel-tags`) e il worktree `JobSpy-wt-ai` dopo il merge di #10.
+- [ ] Aggiornare [#1](https://github.com/dagdaAle/JobSpy/pull/1): `CLAUDE.md` rimanda ad `AGENTS.md`, merge.
+- [ ] Cancellare i branch locali già mergiati e il worktree `JobSpy-wt-ai` dopo il merge di #10.
+
+## Upstream
+
+- [ ] Elencare in `docs/upstream.md` i file upstream modificati da noi (`git diff upstream/main origin/main -- jobspy`, solo file esistenti upstream).
+- [ ] Merge di `upstream/main` su un branch, conflitti risolti tenendo le nostre fonti, controllo di `jobspy/model.py` contro le colonne usate da `webapp/`.
+- [ ] Test verdi + un refresh manuale di un canale LinkedIn e uno Indeed su copia locale del DB. PR, merge, deploy.
+- [ ] Da qui in poi: allineamento a ogni rilascio upstream (annotato in `docs/upstream.md`).
+
+## inPA
+
+- [ ] Test rosso: un bando con sola sede nazionale non passa `_in_area` per `location="Verona"`.
+- [ ] Fix in `jobspy/inpa` (fonte nostra): i nazionali si escludono quando è data una provincia; i regionali restano solo se citano la provincia.
+- [ ] Archiviare i bandi nazionali già nel feed del canale "Concorsi PA Verona" (non cancellarli).
 
 ## Dati
 
-- [ ] Copia notturna fuori dal server dell'ultimo backup giornaliero (destinazione da decidere con Ale: NAS o spazio remoto cifrato).
-- [ ] Retention in `/data/backups`: 14 giornalieri + i backup pre-migrazione. Oggi 16 file, 559 MB.
-- [ ] Provare un ripristino su una copia locale e aprire l'app contro quel DB.
+- [ ] Copia notturna fuori dal server dell'ultimo backup giornaliero (destinazione con Ale: NAS o spazio remoto cifrato).
+- [ ] Retention in `/data/backups`: 14 giornalieri + i backup pre-migrazione.
+- [ ] Provare un ripristino su una copia locale.
 
 ## Canali
 
-- [ ] Con Ale: decidere se Verona resta (PRODUCT, domanda aperta 1).
-- [ ] Archiviare (o cancellare, finché l'archiviazione non c'è) i canali a 0 risultati: full stack, backend, embedded.
-- [ ] Creare 3-4 canali sul nucleo AI/ML e Python remoti (LinkedIn, Indeed remoto, Remotive, WeWorkRemotely) con i filtri della PR #10.
-- [ ] Dopo due settimane: confrontare preferiti/scarti per canale (`get_analytics`) e togliere quelli che non producono preferiti.
+- [ ] Archiviare (o cancellare, finché l'archiviazione non c'è) i 3 canali a 0 risultati: full stack, backend, embedded.
+- [ ] Gli altri restano finché il piano 03 non dice quali producono offerte interessanti.
 
 ## Fatto quando
 
-Nessuna PR aperta più vecchia di una settimana, backup fuori dal server con ripristino provato, canali rivisti con Ale.
+Nessuna PR aperta più vecchia di una settimana, fork allineato a upstream, inPA solo Verona, backup fuori dal server con ripristino provato.
