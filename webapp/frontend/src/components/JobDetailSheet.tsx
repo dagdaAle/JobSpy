@@ -9,6 +9,9 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { Analysis, Job } from "../api/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api } from "../api/client";
 import { useJobDetail } from "../hooks";
 import { parseSkills, salaryLabel, scoreColor, siteDot, siteLabel, timeAgo, DECISION_LABEL, REMOTE_SCOPE_LABEL, SENIORITY_LABEL } from "../lib/format";
 import { CompanyAvatar, type CardMode } from "./JobCard";
@@ -204,6 +207,8 @@ function Body({
             </div>
           )}
 
+          {job.source && <SourceSection job={job} />}
+
           <ApplicationEditor key={job.job_url} jobUrl={job.job_url} />
           <JobCvSection key={`cv-${job.job_url}`} jobUrl={job.job_url} />
           <Separator />
@@ -225,5 +230,45 @@ function Body({
         </div>
       </ScrollArea>
     </>
+  );
+}
+
+
+/** What freehire knows about the job: closed/suspect state, requirements, manual analysis. */
+function SourceSection({ job }: { job: Job }) {
+  const qc = useQueryClient();
+  const src = job.source!;
+  const analyze = () =>
+    api.analyzeJob(job.job_url)
+      .then(() => { toast.success("Analisi fatta"); qc.invalidateQueries(); })
+      .catch((e: Error) => toast.error(e.message));
+  const reqs = src.requirements ?? [];
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs text-muted-foreground">Dalla fonte (freehire{src.origin ? ` · ${src.origin}` : ""})</h3>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {src.closed_at && <Badge variant="destructive">Chiusa alla fonte</Badge>}
+        {src.suspect && (
+          <Badge variant="outline" className="border-amber-500 text-amber-700">
+            Sospetta: {src.reality?.fake_freshness ? "falsa nuova" : `ripubblicata ${src.reality?.mass_posting_count ?? "più"} volte`}
+          </Badge>
+        )}
+        {src.suspect && (
+          <Button size="sm" variant="outline" onClick={analyze}>
+            <Sparkles /> Analizza ora
+          </Button>
+        )}
+      </div>
+      {reqs.length > 0 && (
+        <ul className="list-disc space-y-1 pl-5 text-sm">
+          {reqs.map((r, i) => (
+            <li key={i}>
+              {r.text}
+              {r.priority === "preferred" && <span className="text-muted-foreground"> (preferito)</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

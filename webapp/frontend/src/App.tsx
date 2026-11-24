@@ -14,6 +14,7 @@ import { JobDetailSheet } from "./components/JobDetailSheet";
 import type { CardMode } from "./components/JobCard";
 import { LogsPage } from "./components/LogsPage";
 import { CvPage } from "./components/CvPage";
+import { FreehireSearch } from "./components/FreehireSearch";
 import { useChannels, useFeedback, useJobs, useLogs, useStatus } from "./hooks";
 import type { Feedback, Job, Verdict } from "./api/types";
 import { parseDate } from "./lib/format";
@@ -54,7 +55,7 @@ export default function App() {
     sort: "recent",
   });
 
-  const listView = view !== "analytics" && view !== "logs" && view !== "applications" && view !== "cvs";
+  const listView = view !== "analytics" && view !== "logs" && view !== "applications" && view !== "cvs" && view !== "freehire";
   // Channels only scope the "to review" views; saved/dismissed span everything.
   const channelScoped = (view === "feed" || view === "new") && activeChannelId !== null;
 
@@ -190,6 +191,7 @@ export default function App() {
         {view === "analytics" && <AnalyticsPage />}
         {view === "logs" && <LogsPage />}
         {view === "cvs" && <CvPage />}
+        {view === "freehire" && <FreehireSearch />}
         {view === "applications" && <ApplicationsPage onOpen={setSelected} />}
 
         {heading && (
