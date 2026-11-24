@@ -245,6 +245,7 @@ class Site(Enum):
     WORKINGNOMADS = "workingnomads"
     SUBITO = "subito"
     INPA = "inpa"
+    FREEHIRE = "freehire"
 
 
 class ScraperInput(BaseModel):

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from jobspy.bayt import Bayt
 from jobspy.bdjobs import BDJobs
+from jobspy.freehire import Freehire
 from jobspy.glassdoor import Glassdoor
 from jobspy.google import Google
 from jobspy.hellowork import HelloWork
@@ -57,6 +58,7 @@ SCRAPER_MAPPING: dict[Site, type[Scraper]] = {
     Site.WORKINGNOMADS: WorkingNomads,
     Site.SUBITO: Subito,
     Site.INPA: InPA,
+    Site.FREEHIRE: Freehire,
 }
 
 column_types = {
