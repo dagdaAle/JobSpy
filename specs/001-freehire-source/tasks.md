@@ -214,8 +214,8 @@ fixture → offerte dell'azienda nel feed; slug sparito → refresh in errore.
 - [x] T041 `cd webapp/frontend && npm run build` pulito, poi suite completa dei test verde
 - [x] T042 Smoke dal vivo una volta a mano (quickstart.md), con `results_wanted=3`; nessun output salvato
   in git
-- [ ] T043 PR `feat/freehire-source` → `main` con `--head` esplicito; nessun merge né deploy
-- [ ] T044 Repo separato `~/Progetti/server-apps/intecha-mcp`: branch, in `servers/jobspy.py` i tool
+- [x] T043 PR `feat/freehire-source` → `main` con `--head` esplicito; nessun merge né deploy
+- [x] T044 Repo separato `~/Progetti/server-apps/intecha-mcp`: branch, in `servers/jobspy.py` i tool
   `search_freehire_companies`, `search_freehire`, `save_freehire_job`, `analyze_job` e `company_slug` +
   `freehire` in `create_channel` (:179-197); nomi in `tests/tool_names.txt`; PR sua
 
