@@ -16,7 +16,7 @@
 - Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **ZipRecruiter**, **Bayt**, **Naukri**, **BDJobs** & **HelloWork** concurrently
 - Aggregates the job postings in a dataframe
 - Proxy support to bypass blocking
-- Fork-only sources: **inPA** and **Subito** (Italy), plus remote-only boards **Remotive**, **RemoteOK**, **WeWorkRemotely** & **Working Nomads**
+- Fork-only sources: **inPA** and **Subito** (Italy), **freehire** (public catalogue of company ATS postings), plus remote-only boards **Remotive**, **RemoteOK**, **WeWorkRemotely** & **Working Nomads**
 - Italian-market helpers (`search_italy`, `search_remote`) that fix km/miles and language mismatches
 
 <p align="center">
@@ -74,6 +74,7 @@ jobs = scrape_jobs(
 - **Working Nomads** – public JSON API; the `location` field carries the time zone (e.g. `Time zone: CET`), handy for filtering European roles.
 - **inPA** (`inpa`) – Italian public administration competitions; `search_term="*"` returns every open notice, `location` is matched client-side on the notice's places.
 - **Subito** (`subito`) – Subito Lavoro job ads; `location` is the province (e.g. `"Verona"`).
+- **freehire** (`freehire`) – public keyless JSON API at freehire.me (company ATS postings, aggregators, LinkedIn); `location` is `Italia`, `Europa`, a city or empty (no radius). A filter freehire ignores is reported as an error, never as results.
 
 ## Italian market / remote presets
 
@@ -146,7 +147,7 @@ jobspy "data analyst" --remote --fields title,company,job_url
 Optional
 ├── site_name (list|str): 
 |    linkedin, zip_recruiter, indeed, glassdoor, google, bayt, bdjobs, naukri, hellowork,
-|    inpa, subito, remotive, remoteok, weworkremotely, workingnomads
+|    inpa, subito, freehire, remotive, remoteok, weworkremotely, workingnomads
 |    (default is all)
 │
 ├── search_term (str)

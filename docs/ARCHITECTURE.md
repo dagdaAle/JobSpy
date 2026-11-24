@@ -106,6 +106,12 @@ avviene con le analisi vecchie conservate in sola lettura.
 | `applications`, `application_events`, `application_files` | candidature, passi, file inviati, risposte dichiarate | |
 | `cvs`, `cv_versions` | libreria CV | |
 | `refresh_log`, `meta` | log ed esecuzioni, configurazione | |
+| `job_sources` | dati di un catalogo esterno (oggi freehire) per offerta: slug, sorgente originale, stipendio, competenze, requisiti, segnale sospetto, chiusura alla fonte | **già oggi**; fuori da `jobs` perché l'upsert di `jobs` sovrascrive tutto |
+
+freehire (spec `specs/001-freehire-source/`) è già attivo: canali per parola chiave o per azienda, ricerca al volo
+senza salvare (`/freehire/search`, `/freehire/save`), controllo giornaliero delle chiusure alla fonte dopo i refresh
+(log `archive` / `source_closed`). Le offerte che freehire prende da LinkedIn usano l'URL dello scraper LinkedIn:
+stessa riga, stesso verdetto.
 
 ## Valutazione: come si calcola **(scelta di Claude)**
 
