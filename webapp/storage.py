@@ -359,6 +359,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "exclude_keywords": "TEXT NOT NULL DEFAULT '[]'",
             "exclude_companies": "TEXT NOT NULL DEFAULT '[]'",
             "work_mode": "TEXT NOT NULL DEFAULT 'any'",
+            "company_slug": "TEXT NOT NULL DEFAULT ''",
         },
         "analysis": {"context_key": "TEXT", "assessment": "TEXT"},
         "analysis_runs": {"context_key": "TEXT"},
@@ -367,6 +368,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for col, kind in columns.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    # Data an external catalogue (freehire) adds to a job. Kept apart from
+    # `jobs` because the jobs upsert overwrites every column on each scrape.
+    conn.execute("""CREATE TABLE IF NOT EXISTS job_sources (
+        job_url TEXT NOT NULL, source TEXT NOT NULL, slug TEXT NOT NULL, origin TEXT,
+        salary_min REAL, salary_max REAL, salary_currency TEXT, salary_interval TEXT,
+        skills TEXT, requirements TEXT, category TEXT, posting_language TEXT,
+        suspect INTEGER NOT NULL DEFAULT 0, reality TEXT, closed_at TEXT, checked_at TEXT,
+        updated_at TEXT NOT NULL, PRIMARY KEY (job_url, source))""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_job_sources_slug ON job_sources(slug)")
     # Pre-migration analyses stay valid ('legacy') instead of being re-paid.
     # To re-analyse them: UPDATE analysis SET context_key = '' WHERE context_key = 'legacy'
     conn.execute("UPDATE analysis SET context_key = 'legacy' WHERE context_key IS NULL")
@@ -636,6 +646,96 @@ def upsert_jobs(records: list[dict[str, Any]]) -> None:
         _upsert_jobs_conn(conn, records)
 
 
+# --------------------------------------------------------------------------- #
+# External catalogue data (freehire)                                           #
+# --------------------------------------------------------------------------- #
+# Salary and skills fall back to the catalogue when the job's own columns are
+# empty: another scraper may re-save the same job without them.
+
+_SOURCE_JOIN = "LEFT JOIN job_sources s ON s.job_url = j.job_url AND s.source = 'freehire'"
+_SOURCE_CARD_COLUMNS = """COALESCE(NULLIF(j.salary_min, ''), s.salary_min) AS salary_min,
+                   COALESCE(NULLIF(j.salary_max, ''), s.salary_max) AS salary_max,
+                   COALESCE(NULLIF(j.salary_currency, ''), s.salary_currency) AS salary_currency,
+                   COALESCE(NULLIF(j.salary_interval, ''), s.salary_interval) AS salary_interval,
+                   s.origin AS source_origin, COALESCE(s.suspect, 0) AS source_suspect,
+                   s.closed_at AS source_closed_at"""
+
+_SOURCE_JSON_FIELDS = ("skills", "requirements", "reality")
+_SOURCE_FIELDS = (
+    "slug", "origin", "salary_min", "salary_max", "salary_currency", "salary_interval",
+    "skills", "requirements", "category", "posting_language", "suspect", "reality", "closed_at",
+)
+
+
+def upsert_job_sources(rows: list[dict[str, Any]]) -> None:
+    """Store catalogue data per job; ``closed_at`` follows the latest answer."""
+    if not rows:
+        return
+    now = _now()
+    with _lock, _connect() as conn:
+        for row in rows:
+            values = {k: row.get(k) for k in _SOURCE_FIELDS}
+            for key in _SOURCE_JSON_FIELDS:
+                values[key] = json.dumps(values[key] if values[key] is not None else [], ensure_ascii=False)
+            values["suspect"] = 1 if values["suspect"] else 0
+            cols = ["job_url", "source", *values, "updated_at"]
+            params = [row["job_url"], row.get("source") or "freehire", *values.values(), now]
+            conn.execute(
+                f"INSERT INTO job_sources ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)}) "
+                f"ON CONFLICT(job_url, source) DO UPDATE SET "
+                + ", ".join(f"{k} = excluded.{k}" for k in [*values, "updated_at"]),
+                params,
+            )
+
+
+def job_source(job_url: str, source: str = "freehire") -> dict[str, Any] | None:
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM job_sources WHERE job_url = ? AND source = ?", (job_url, source)
+        ).fetchone()
+    if row is None:
+        return None
+    rec = dict(row)
+    for key in _SOURCE_JSON_FIELDS:
+        rec[key] = json.loads(rec[key]) if rec.get(key) else ([] if key != "reality" else {})
+    rec["suspect"] = bool(rec["suspect"])
+    return rec
+
+
+def source_jobs_to_check(source: str = "freehire") -> list[dict[str, Any]]:
+    """Catalogue jobs still in play (not archived), to ask whether they closed."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """SELECT s.job_url, s.slug, s.closed_at FROM job_sources s
+               JOIN jobs j ON j.job_url = s.job_url
+               WHERE s.source = ? AND j.archived_at IS NULL""",
+            (source,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_source_closed(job_url: str, closed_at: str | None, source: str = "freehire") -> bool:
+    """Record the source's open/closed state. A newly closed job without a
+    verdict or application leaves the feed (``closed_at_source``); one with a
+    verdict or application stays, labelled. Returns True if it was archived."""
+    now = _now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE job_sources SET closed_at = ?, checked_at = ? WHERE job_url = ? AND source = ?",
+            (closed_at, now, job_url, source),
+        )
+        if not closed_at:
+            return False
+        cur = conn.execute(
+            """UPDATE jobs SET archived_at = ?, archive_reason = 'closed_at_source'
+               WHERE job_url = ? AND archived_at IS NULL
+                 AND job_url NOT IN (SELECT job_url FROM feedback)
+                 AND job_url NOT IN (SELECT job_url FROM applications)""",
+            (now, job_url),
+        )
+        return cur.rowcount > 0
+
+
 def get_all_jobs(include_archived: bool = False, archived_only: bool = False) -> list[dict[str, Any]]:
     """
     Return stored jobs as card records, newest first.
@@ -649,8 +749,7 @@ def get_all_jobs(include_archived: bool = False, archived_only: bool = False) ->
             """
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
-                   j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval, j.first_seen_at, j.archived_at, j.feed_since,
+                   j.company_logo, """ + _SOURCE_CARD_COLUMNS + """, j.first_seen_at, j.archived_at, j.feed_since,
                    j.job_url_direct,
                    EXISTS(
                        SELECT 1 FROM channel_jobs cj
@@ -658,6 +757,7 @@ def get_all_jobs(include_archived: bool = False, archived_only: bool = False) ->
                          AND cj.is_new = 1
                    ) AS is_new
             FROM jobs j
+            """ + _SOURCE_JOIN + """
             WHERE (? OR j.archived_at IS NULL) AND (NOT ? OR j.archived_at IS NOT NULL)
             ORDER BY j.date_posted DESC, j.seen_at DESC
             """,
@@ -670,6 +770,8 @@ def _row_to_card(row: sqlite3.Row) -> dict[str, Any]:
     """Normalise a jobs row into a lightweight card record (no description)."""
     rec = dict(row)
     rec["is_remote"] = _is_remote_true(rec.get("is_remote"))
+    if "source_suspect" in rec:
+        rec["source_suspect"] = bool(rec["source_suspect"])
     if "is_new" in rec:
         rec["is_new"] = bool(rec["is_new"])
     return rec
@@ -809,6 +911,14 @@ def get_job(job_url: str) -> dict[str, Any] | None:
         return None
     rec = dict(row)
     rec["is_remote"] = _is_remote_true(rec.get("is_remote"))
+    src = job_source(job_url)
+    rec["source"] = src
+    if src:
+        for key in ("salary_min", "salary_max", "salary_currency", "salary_interval"):
+            if rec.get(key) in (None, ""):
+                rec[key] = src[key]
+        if not rec.get("skills") and src["skills"]:
+            rec["skills"] = ", ".join(src["skills"])
     return rec
 
 
@@ -829,6 +939,7 @@ _CHANNEL_FIELDS = (
     "exclude_keywords",
     "exclude_companies",
     "work_mode",
+    "company_slug",
 )
 # Post-scrape filters (see channel_filters.py), stored as JSON lists.
 _CHANNEL_LIST_FIELDS = ("include_keywords", "exclude_keywords", "exclude_companies")
@@ -858,6 +969,7 @@ def create_channel(
     exclude_keywords: list[str] | None = None,
     exclude_companies: list[str] | None = None,
     work_mode: str = "any",
+    company_slug: str = "",
 ) -> int:
     """Create a channel and return its new id."""
     values = _channel_values({
@@ -866,6 +978,7 @@ def create_channel(
         "hours_old": hours_old, "is_remote": is_remote,
         "include_keywords": include_keywords, "exclude_keywords": exclude_keywords,
         "exclude_companies": exclude_companies, "work_mode": work_mode,
+        "company_slug": company_slug,
     })
     with _lock, _connect() as conn:
         cur = conn.execute(
@@ -1043,12 +1156,12 @@ def get_channel_jobs(channel_id: int) -> list[dict[str, Any]]:
             """
             SELECT j.job_url, j.site, j.title, j.company, j.location,
                    j.is_remote, j.job_type, j.date_posted,
-                   j.company_logo, j.salary_min, j.salary_max,
-                   j.salary_currency, j.salary_interval, j.first_seen_at, j.archived_at, j.feed_since,
+                   j.company_logo, """ + _SOURCE_CARD_COLUMNS + """, j.first_seen_at, j.archived_at, j.feed_since,
                    j.job_url_direct,
                    cj.first_seen, cj.last_seen, cj.is_new
             FROM channel_jobs cj
             JOIN jobs j ON j.job_url = cj.job_url
+            """ + _SOURCE_JOIN + """
             WHERE cj.channel_id = ? AND j.archived_at IS NULL
             ORDER BY cj.last_seen DESC, cj.first_seen DESC
             """,
@@ -1200,6 +1313,7 @@ _PENDING_SQL = """
     FROM jobs j
     WHERE COALESCE(j.site, '') != 'manual'
       AND j.job_url NOT IN """ + _INACTIVE_SQL + """
+      AND j.job_url NOT IN (SELECT job_url FROM job_sources WHERE suspect = 1 OR closed_at IS NOT NULL)
       AND NOT EXISTS (SELECT 1 FROM analysis a WHERE a.job_url = j.job_url
         AND (a.context_key = COALESCE((SELECT value FROM meta WHERE key = 'analysis_context'), '') OR a.context_key = 'legacy'))
       AND (SELECT COUNT(*) FROM analysis_runs r WHERE r.job_url = j.job_url
