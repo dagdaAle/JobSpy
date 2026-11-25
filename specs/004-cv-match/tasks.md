@@ -5,5 +5,5 @@
 - [x] T003 Tabella `job_keywords`; endpoint `GET /cvs/{id}/match`, `POST /cvs/{id}/tailor-proposal`, `/cvs/tailor` esteso
 - [x] T004 Test `tests/test_cv_match.py` e adeguamento dei test CV (110 verdi)
 - [x] T005 Frontend: `CvMatchPanel` a tre stati in `JobCvSection`, tipi e client
-- [ ] T006 Design Penpot: componenti CV match (02) e schermate desktop/mobile (03)
+- [x] T006 Design Penpot: componenti CV match (02) e schermate desktop/mobile (03)
 - [ ] T007 Prova dei prompt con DeepSeek reale dopo il deploy
