@@ -5,6 +5,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import type { StatusResponse } from "../api/types";
 
+export type Area = "lavoro" | "pa" | "gare";
+
+export const AREAS: { area: Area; label: string; short: string }[] = [
+  { area: "lavoro", label: "Lavoro", short: "Lavoro" },
+  { area: "pa", label: "Concorsi PA", short: "PA" },
+  { area: "gare", label: "Gare P.IVA", short: "Gare" },
+];
+
 export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "freehire" | "cvs" | "analytics" | "logs";
 
 const NAV: { view: View; label: string }[] = [
@@ -21,26 +29,31 @@ const NAV: { view: View; label: string }[] = [
 ];
 
 interface Props {
-  view: View;
-  onNav: (view: View) => void;
-  counts: Partial<Record<View, number>>;
+  area: Area;
+  onArea: (area: Area) => void;
+  // Lavoro-only navigation; the other areas have their own tabs in the page.
+  view?: View;
+  onNav?: (view: View) => void;
+  counts?: Partial<Record<View, number>>;
   status?: StatusResponse;
   logErrors?: boolean;
 }
 
-export function AppHeader({ view, onNav, counts, status, logErrors }: Props) {
+export function AppHeader({ area, onArea, view, onNav, counts = {}, status, logErrors }: Props) {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
         <div className="flex items-center gap-2 font-semibold">
           <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <Search className="size-4" strokeWidth={2.5} />
           </span>
-          JobSpy
+          <span className="hidden md:inline">JobSpy</span>
         </div>
 
+        <AreaSwitch area={area} onArea={onArea} />
+
         <nav className="-mb-px flex h-full min-w-0 flex-1 gap-1 overflow-x-auto">
-          {NAV.map(({ view: v, label }) => {
+          {onNav && NAV.map(({ view: v, label }) => {
             const active = v === view;
             const count = counts[v];
             return (
@@ -81,6 +94,28 @@ export function AppHeader({ view, onNav, counts, status, logErrors }: Props) {
         </div>
       </div>
     </header>
+  );
+}
+
+function AreaSwitch({ area, onArea }: { area: Area; onArea: (area: Area) => void }) {
+  return (
+    <nav aria-label="Area" className="flex shrink-0 rounded-lg bg-muted p-0.5">
+      {AREAS.map((a) => (
+        <button
+          key={a.area}
+          type="button"
+          onClick={() => onArea(a.area)}
+          aria-current={a.area === area ? "page" : undefined}
+          className={cn(
+            "rounded-md px-2 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:px-2.5",
+            a.area === area ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <span className="sm:hidden">{a.short}</span>
+          <span className="hidden sm:inline">{a.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
