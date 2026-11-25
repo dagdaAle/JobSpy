@@ -68,10 +68,11 @@ class FreehireMappingTests(unittest.TestCase):
         self.assertTrue(any_verona.search('Verona, WI, US'))
         self.assertFalse(any_verona.search('Rieti, IT'))
         italian = location_match('Verona, Italia')
-        for ok in ('Verona, Italy', 'Verona, IT, 37122', 'Verona',
+        for ok in ('Verona, Italy', 'Verona, IT, 37122', 'Verona', 'Verona, Veneto',
                    'Milan, Italy; Verona, Province of Verona, Italy'):
             self.assertTrue(italian.search(ok), ok)
-        for ko in ('Verona, WI, US', 'Verona, New York', 'Rieti, IT', 'Veronaville, Italy'):
+        for ko in ('Verona, WI, US', 'Verona, New York', 'Verona, Virginia, USA', 'Rieti, IT',
+                   'Veronaville, Italy'):
             self.assertFalse(italian.search(ko), ko)
 
     def test_normalize_url(self):

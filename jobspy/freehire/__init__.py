@@ -45,6 +45,37 @@ _MAX_LOCATION_CHARS = 100
 
 _COUNTRY_WORDS = {"italia": "it", "italy": "it"}
 _REGION_WORDS = {"europa": "eu", "europe": "eu", "eu": "eu"}
+# "Verona, Veneto" has no country: the region alone says Italy
+_ITALIAN_REGIONS = (
+    "abruzzo",
+    "basilicata",
+    "calabria",
+    "campania",
+    "emilia-romagna",
+    "emilia",
+    "friuli",
+    "lazio",
+    "liguria",
+    "lombardia",
+    "lombardy",
+    "marche",
+    "molise",
+    "piemonte",
+    "piedmont",
+    "puglia",
+    "apulia",
+    "sardegna",
+    "sardinia",
+    "sicilia",
+    "sicily",
+    "toscana",
+    "tuscany",
+    "trentino",
+    "umbria",
+    "valle d'aosta",
+    "aosta valley",
+    "veneto",
+)
 _PERIODS = {
     "year": CompensationInterval.YEARLY,
     "month": CompensationInterval.MONTHLY,
@@ -269,7 +300,8 @@ def location_match(location: str | None) -> re.Pattern[str] | None:
     if not any(p in _COUNTRY_WORDS for p in parts[1:]):
         return re.compile(city, re.I)
     # shortcut: only Italy is known as a country, add more to _COUNTRY_WORDS when needed
-    return re.compile(rf"{city}.*(?<!\w)(italy|italia|it)(?!\w)|^\s*{city}\s*$", re.I)
+    italy = "|".join(("italy", "italia", "it", *_ITALIAN_REGIONS))
+    return re.compile(rf"{city}.*(?<!\w)({italy})(?!\w)|^\s*{city}\s*$", re.I)
 
 
 def fetch_postings(
