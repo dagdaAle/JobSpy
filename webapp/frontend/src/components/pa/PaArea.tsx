@@ -1,5 +1,7 @@
 import { FileText } from "lucide-react";
 import { AreaPage, type AreaConfig } from "../area/AreaPage";
+import type { Area } from "../AppHeader";
+import { daysUntil } from "../decision";
 
 const SOURCES: Record<string, string> = { inpa: "inPA", gazzetta: "Gazzetta Ufficiale · Concorsi" };
 const sourceLabel = (s: string) => SOURCES[s] ?? s;
@@ -46,6 +48,20 @@ const config: AreaConfig = {
   ],
   profileHint: "Il profilo decide l'esito di ogni bando (titolo, classe di laurea, età, area). Cambiarlo non richiede una nuova analisi.",
   itemMeta: (item) => (item.kind ? [{ icon: <FileText />, text: item.kind }] : []),
+  itemNumber: (item) => {
+    const d = daysUntil(item.deadline);
+    if (d === null) return { value: null, unknown: "Scadenza non nota" };
+    if (d < 0) return { value: null, unknown: "Scaduto" };
+    return { value: d === 0 ? "oggi" : `${d} ${d === 1 ? "g" : "gg"}`, unit: "alla scadenza", unknown: "" };
+  },
+  range: {
+    label: "Scade entro",
+    max: 90,
+    step: 5,
+    format: (v) => (v ? `${v} gg` : "qualsiasi"),
+    // Unknown deadlines stay: unknown is not late.
+    keep: (item, v) => { const d = daysUntil(item.deadline); return d === null || d <= v; },
+  },
   itemFacts: (f) => {
     const out: string[] = [];
     if (typeof f.livello_richiesto === "string") out.push(`Titolo: ${levelLabel(f.livello_richiesto)}`);
@@ -56,6 +72,6 @@ const config: AreaConfig = {
   },
 };
 
-export function PaArea() {
-  return <AreaPage config={config} />;
+export function PaArea({ onArea }: { onArea: (area: Area) => void }) {
+  return <AreaPage config={config} onArea={onArea} />;
 }

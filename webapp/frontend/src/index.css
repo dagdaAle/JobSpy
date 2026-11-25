@@ -1,13 +1,17 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/outfit";
+@import "@fontsource-variable/jetbrains-mono";
 
 @custom-variant dark (&:is(.dark *));
 
+/* Token dal design Penpot "JobSpy — Brand e frontend" (specs/003-frontend-design). */
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-sans: 'Inter Variable', sans-serif;
+    --font-heading: 'Outfit Variable', sans-serif;
+    --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -39,92 +43,170 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --color-score-high: var(--score-high);
-    --color-score-mid: var(--score-mid);
-    --color-score-low: var(--score-low);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-destructive-soft: var(--destructive-soft);
+    --color-header: var(--header);
+    --color-header-foreground: var(--header-foreground);
+    --color-header-muted: var(--header-muted);
+    --color-header-field: var(--header-field);
+    --color-candidati: var(--decision-candidati);
+    --color-candidati-foreground: var(--decision-candidati-foreground);
+    --color-valuta: var(--decision-valuta);
+    --color-valuta-foreground: var(--decision-valuta-foreground);
+    --color-lascia: var(--decision-lascia);
+    --color-lascia-foreground: var(--decision-lascia-foreground);
+    --color-unknown: var(--unknown);
+    --color-unknown-foreground: var(--unknown-foreground);
+    --color-unknown-border: var(--unknown-border);
+    --color-area-lavoro: var(--area-lavoro);
+    --color-area-lavoro-soft: var(--area-lavoro-soft);
+    --color-area-pa: var(--area-pa);
+    --color-area-pa-soft: var(--area-pa-soft);
+    --color-area-gare: var(--area-gare);
+    --color-area-gare-soft: var(--area-gare-soft);
+    --color-deadline: var(--deadline-soon);
+    --color-deadline-foreground: var(--deadline-soon-foreground);
+    --color-brand-dot: var(--brand-dot);
+    /* punteggio (dettaglio, log, candidature): niente rosso, il basso è grigio */
+    --color-score-high: var(--decision-candidati-foreground);
+    --color-score-mid: var(--decision-valuta-foreground);
+    --color-score-low: var(--muted-foreground);
+    /* sm chip e tag · md input · lg pannelli · xl card e dialog */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+    --radius-2xl: 24px;
+    --radius-3xl: 28px;
+    --radius-4xl: 32px;
 }
 
 :root {
-    --background: oklch(0.985 0.002 250);
-    --foreground: oklch(0.2 0.01 260);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.2 0.01 260);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.2 0.01 260);
-    --primary: oklch(0.52 0.09 185);
-    --primary-foreground: oklch(0.99 0 0);
-    --secondary: oklch(0.955 0.004 250);
-    --secondary-foreground: oklch(0.25 0.01 260);
-    --muted: oklch(0.955 0.004 250);
-    --muted-foreground: oklch(0.52 0.012 260);
-    --accent: oklch(0.955 0.004 250);
-    --accent-foreground: oklch(0.25 0.01 260);
-    --destructive: oklch(0.577 0.2 27);
-    --border: oklch(0.915 0.005 250);
-    --input: oklch(0.9 0.005 250);
-    --ring: oklch(0.52 0.09 185);
-    --chart-1: oklch(0.52 0.09 185);
-    --chart-2: oklch(0.7 0.1 185);
-    --chart-3: oklch(0.6 0.12 250);
-    --chart-4: oklch(0.75 0.12 80);
-    --chart-5: oklch(0.65 0.15 20);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
-    /* AI relevance score: the only strongly coloured element on a card. */
-    --score-high: oklch(0.6 0.14 155);
-    --score-mid: oklch(0.7 0.14 70);
-    --score-low: oklch(0.6 0.17 25);
+    --chart-1: #1C6B37;
+    --chart-2: #7A5000;
+    --chart-3: #2F5BD3;
+    --chart-4: #8B3FA8;
+    --chart-5: #0E7490;
+    --sidebar: #FFFFFF;
+    --sidebar-foreground: #17201C;
+    --sidebar-primary: #17201C;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #ECEFEA;
+    --sidebar-accent-foreground: #17201C;
+    --sidebar-border: #DFE5DF;
+    --sidebar-ring: #2F5BD3;
+  --radius: 1rem;
+
+  --background: #F6F7F4;
+  --foreground: #17201C;
+  --card: #FFFFFF;
+  --card-foreground: #17201C;
+  --popover: #FFFFFF;
+  --popover-foreground: #17201C;
+  --primary: #17201C;              /* bottoni neri a pillola: bianco 16,7:1 */
+  --primary-foreground: #FFFFFF;
+  --secondary: #ECEFEA;
+  --secondary-foreground: #17201C;
+  --muted: #ECEFEA;
+  --muted-foreground: #5C6862;     /* 5,8:1 su card */
+  --accent: #ECEFEA;
+  --accent-foreground: #17201C;
+  --destructive: #B3261E;          /* 6,5:1 su card — solo errori e bloccanti certi */
+  --destructive-foreground: #FFFFFF;
+  --destructive-soft: #FBE9E7;
+  --border: #DFE5DF;
+  --input: #CED9CF;
+  --ring: #2F5BD3;
+
+  --header: #121715;               /* testata nera */
+  --header-foreground: #F4F6F4;
+  --header-muted: #9AA6A0;         /* 7,2:1 sulla testata */
+  --header-field: #1F2623;
+
+  --decision-candidati: #E2F2E4;   /* l'unico verde dell'app */
+  --decision-candidati-foreground: #1C6B37;   /* 5,6:1 */
+  --decision-valuta: #F6EEDF;
+  --decision-valuta-foreground: #7A5000;      /* 6,1:1 */
+  --decision-lascia: #ECEEED;
+  --decision-lascia-foreground: #5C6862;      /* 5,0:1 */
+
+  --unknown: #FFFFFF;              /* non noto: bianco con bordo tratteggiato */
+  --unknown-foreground: #56615C;   /* 6,4:1 */
+  --unknown-border: #808C86;       /* 3,6:1 */
+
+  --area-lavoro: #2F5BD3;          /* 5,9:1 su card */
+  --area-lavoro-soft: #E8EEFC;
+  --area-pa: #8B3FA8;              /* 6,2:1 */
+  --area-pa-soft: #F4E9F8;
+  --area-gare: #0E7490;            /* 5,4:1 */
+  --area-gare-soft: #E2F3F7;
+
+  --deadline-soon: #FFE2B3;        /* scadenza entro 7 giorni */
+  --deadline-soon-foreground: #8A4B00;        /* 5,4:1 */
+  --brand-dot: #5FC47E;            /* solo nel marchio */
 }
 
 .dark {
-    --background: oklch(0.17 0.006 260);
-    --foreground: oklch(0.94 0.004 260);
-    --card: oklch(0.205 0.007 260);
-    --card-foreground: oklch(0.94 0.004 260);
-    --popover: oklch(0.22 0.007 260);
-    --popover-foreground: oklch(0.94 0.004 260);
-    --primary: oklch(0.76 0.11 185);
-    --primary-foreground: oklch(0.2 0.03 190);
-    --secondary: oklch(0.26 0.008 260);
-    --secondary-foreground: oklch(0.94 0.004 260);
-    --muted: oklch(0.25 0.008 260);
-    --muted-foreground: oklch(0.68 0.012 260);
-    --accent: oklch(0.26 0.008 260);
-    --accent-foreground: oklch(0.94 0.004 260);
-    --destructive: oklch(0.68 0.17 22);
-    --border: oklch(1 0 0 / 8%);
-    --input: oklch(1 0 0 / 12%);
-    --ring: oklch(0.76 0.11 185);
-    --chart-1: oklch(0.76 0.11 185);
-    --chart-2: oklch(0.6 0.09 185);
-    --chart-3: oklch(0.7 0.12 250);
-    --chart-4: oklch(0.8 0.12 80);
-    --chart-5: oklch(0.7 0.15 20);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
-    --score-high: oklch(0.74 0.15 155);
-    --score-mid: oklch(0.8 0.14 75);
-    --score-low: oklch(0.7 0.16 25);
+    --chart-1: #7FD59A;
+    --chart-2: #E8C27A;
+    --chart-3: #8FA8FF;
+    --chart-4: #D59BEB;
+    --chart-5: #5CC8E0;
+    --sidebar: #171C1A;
+    --sidebar-foreground: #EDF1EE;
+    --sidebar-primary: #EDF1EE;
+    --sidebar-primary-foreground: #121715;
+    --sidebar-accent: #222926;
+    --sidebar-accent-foreground: #EDF1EE;
+    --sidebar-border: #2A322E;
+    --sidebar-ring: #8FA8FF;
+  --background: #0F1311;
+  --foreground: #EDF1EE;
+  --card: #171C1A;
+  --card-foreground: #EDF1EE;
+  --popover: #1C2220;
+  --popover-foreground: #EDF1EE;
+  --primary: #EDF1EE;
+  --primary-foreground: #121715;   /* 15,9:1 */
+  --secondary: #222926;
+  --secondary-foreground: #EDF1EE;
+  --muted: #222926;
+  --muted-foreground: #9AA6A0;     /* 6,9:1 */
+  --accent: #222926;
+  --accent-foreground: #EDF1EE;
+  --destructive: #FF7B6E;          /* 6,8:1 */
+  --destructive-foreground: #1A0705;
+  --destructive-soft: #3A1714;
+  --border: #2A322E;
+  --input: #36403B;
+  --ring: #8FA8FF;
+
+  --header: #0A0D0C;
+  --header-foreground: #F4F6F4;
+  --header-muted: #8A968F;
+  --header-field: #161B19;
+
+  --decision-candidati: #173324;
+  --decision-candidati-foreground: #7FD59A;   /* 7,7:1 */
+  --decision-valuta: #2E2718;
+  --decision-valuta-foreground: #E8C27A;      /* 8,8:1 */
+  --decision-lascia: #222826;
+  --decision-lascia-foreground: #9AA6A0;      /* 6,0:1 */
+
+  --unknown: #171C1A;
+  --unknown-foreground: #A4AFA9;   /* 7,6:1 */
+  --unknown-border: #6A766F;       /* 3,4:1 */
+
+  --area-lavoro: #8FA8FF;
+  --area-lavoro-soft: #1B2440;
+  --area-pa: #D59BEB;
+  --area-pa-soft: #2E1F36;
+  --area-gare: #5CC8E0;
+  --area-gare-soft: #13303A;
+
+  --deadline-soon: #3A2A10;
+  --deadline-soon-foreground: #FFB95C;        /* 8,1:1 */
+  --brand-dot: #3FA862;
 }
 
 @layer base {

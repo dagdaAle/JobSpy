@@ -1,44 +1,31 @@
-import { Building2, CalendarClock, ExternalLink, Heart, MapPin, Undo2, X } from "lucide-react";
+// Card and detail of a bando (PA) or gara (Gare): the same card as the Lavoro offers, with the deadline on top.
+import { Bookmark, CircleCheck, CircleHelp, ExternalLink, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import type { AreaDecision, AreaItem, AreaView } from "../../api/areas";
+import type { AreaItem, AreaView } from "../../api/areas";
 import { timeAgo } from "../../lib/format";
-
-const DAY = 86_400_000;
-
-export const DECISION: Record<AreaDecision, { text: string; className: string }> = {
-  adatto: { text: "Adatto", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
-  da_valutare: { text: "Da valutare", className: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
-  non_adatto: { text: "Non adatto", className: "bg-muted text-muted-foreground" },
-};
+import { CardNumber, DecisionCard, type CardState } from "../DecisionCard";
+import { areaDecision, DECISION, DecisionBadge, Deadline, Tag } from "../decision";
 
 export interface MetaEntry {
   icon: React.ReactNode;
   text: string;
 }
 
-/** Calendar days from today to an ISO date (negative = past). */
-function daysUntil(iso: string): number | null {
-  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
-  if (!y || !m || !d) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.round((new Date(y, m - 1, d).getTime() - today.getTime()) / DAY);
+export interface CardNumberSpec {
+  value: string | null;
+  unit?: string;
+  unknown: string;
 }
 
-function Deadline({ iso }: { iso: string }) {
-  const days = daysUntil(iso);
-  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
-  const date = days === null ? iso : new Date(y, m - 1, d).toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" });
-  const soon = days !== null && days >= 0 && days <= 7;
-  const left = days === null || days < 0 ? "" : days === 0 ? " · oggi" : days === 1 ? " · domani" : ` · tra ${days} g`;
-  return (
-    <Meta icon={<CalendarClock />} className={soon ? "font-medium text-amber-700 dark:text-amber-300" : undefined}>
-      Scade il {date}{left}
-    </Meta>
-  );
+const isUrl = (u: string | null) => /^https?:\/\//i.test(u ?? "");
+
+function stateOf(item: AreaItem, view: AreaView): CardState {
+  if (item.verdict === "like") return "saved";
+  if (item.verdict === "dislike") return "dismissed";
+  return view === "archived" ? "archived" : "open";
 }
 
 interface Props {
@@ -47,140 +34,119 @@ interface Props {
   sourceLabel: (source: string) => string;
   meta: MetaEntry[];
   facts: string[];
+  number: CardNumberSpec;
+  onOpen: () => void;
   onLike: () => void;
   onDismiss: () => void;
   onRestore: () => void;
 }
 
-export function ItemCard({ item, view, sourceLabel, meta, facts, onLike, onDismiss, onRestore }: Props) {
-  const decision = item.decision ? DECISION[item.decision] : null;
+export function ItemCard({ item, view, sourceLabel, meta, facts, number, onOpen, onLike, onDismiss, onRestore }: Props) {
+  const decision = areaDecision(item.decision);
+  const tags = [...meta.map((m) => m.text), ...facts].slice(0, 4);
   return (
-    <article className="flex h-full flex-col rounded-xl border bg-card text-card-foreground shadow-xs transition-[border-color,box-shadow] hover:border-foreground/15 hover:shadow-md">
-      <div className="flex flex-1 flex-col gap-4 p-5">
-        <header className="min-w-0">
-          <h3 className="line-clamp-3 font-medium leading-snug">{item.title}</h3>
-          {item.buyer && (
-            <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-              <Building2 className="size-3.5 shrink-0" />
-              <span className="truncate">{item.buyer}</span>
-            </p>
-          )}
-        </header>
+    <DecisionCard
+      decision={decision}
+      badgeLabel={decision === "nonnoto" ? "Non noto · analisi in attesa" : undefined}
+      top={<Deadline iso={item.deadline} />}
+      org={item.buyer}
+      title={item.title}
+      reason={item.reasons[0] ?? (item.decision ? null : "Analisi AI in attesa: leggi l’atto e decidi tu.")}
+      tags={tags.map((t) => <Tag key={t}>{t}</Tag>)}
+      number={<CardNumber {...number} />}
+      place={[item.place, sourceLabel(item.source)].filter(Boolean).join(" · ")}
+      state={stateOf(item, view)}
+      onOpen={onOpen}
+      onSave={onLike}
+      onDismiss={onDismiss}
+      onRestore={onRestore}
+    />
+  );
+}
 
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
-          {item.deadline && <Deadline iso={item.deadline} />}
-          {item.place && <Meta icon={<MapPin />}>{item.place}</Meta>}
-          {meta.map((m) => (
-            <Meta key={m.text} icon={m.icon}>{m.text}</Meta>
-          ))}
-        </div>
-
-        <div className="mt-auto space-y-2">
-          {decision ? (
-            <div className="space-y-1 text-xs">
-              <span className={cn("inline-block rounded px-1.5 py-0.5 font-medium", decision.className)}>{decision.text}</span>
-              {item.reasons.length > 0 && (
-                <ul className="list-inside list-disc text-muted-foreground">
-                  {item.reasons.slice(0, 3).map((r) => <li key={r}>{r}</li>)}
-                </ul>
+export function ItemDetailSheet({ item, view, sourceLabel, facts, number, onClose, onLike, onDismiss, onRestore }: {
+  item: AreaItem | null;
+  view: AreaView;
+  sourceLabel: (source: string) => string;
+  facts: string[];
+  number: CardNumberSpec | null;
+  onClose: () => void;
+  onLike: (item: AreaItem) => void;
+  onDismiss: (item: AreaItem) => void;
+  onRestore: (item: AreaItem) => void;
+}) {
+  const act = (fn: (item: AreaItem) => void) => { if (item) { fn(item); onClose(); } };
+  const decision = areaDecision(item?.decision ?? null);
+  const state = item ? stateOf(item, view) : "open";
+  return (
+    <Sheet open={item !== null} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="w-full gap-0 bg-background p-0 sm:max-w-[560px]">
+        {item && (
+          <>
+            <div className={cn("space-y-3 px-6 pt-5 pb-6", DECISION[decision].tint)}>
+              <div className="flex flex-wrap items-center gap-2 pr-10">
+                <DecisionBadge decision={decision} onTint />
+                <Deadline iso={item.deadline} />
+              </div>
+              <p className="text-[13px] text-muted-foreground">{[item.buyer, item.place].filter(Boolean).join(" · ")}</p>
+              <SheetTitle className="font-heading text-2xl leading-tight font-semibold">{item.title}</SheetTitle>
+              <SheetDescription className="text-sm text-muted-foreground">
+                {sourceLabel(item.source)}{item.published_at ? ` · pubblicato ${timeAgo(item.published_at)}` : ""}{item.kind ? ` · ${item.kind}` : ""}
+              </SheetDescription>
+              {number && (
+                <div>
+                  {number.value ? <p className="font-mono text-lg font-semibold">{number.value}</p> : <p className="text-base text-unknown-foreground italic">{number.unknown}</p>}
+                  {number.unit && <p className="text-xs text-muted-foreground">{number.unit}</p>}
+                </div>
               )}
             </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">Analisi AI in attesa</p>
-          )}
-          {facts.length > 0 && <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>}
-        </div>
-      </div>
 
-      <footer className="flex items-center gap-2 border-t px-5 py-2.5 text-xs text-muted-foreground">
-        <span className="truncate">{sourceLabel(item.source)}</span>
-        {item.published_at && (
-          <>
-            <span aria-hidden>·</span>
-            <span className="shrink-0">{timeAgo(item.published_at)}</span>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="space-y-6 p-6">
+                <section className="space-y-2">
+                  <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Perché · i motivi</h3>
+                  {item.reasons.length ? item.reasons.map((r) => (
+                    <div key={r} className="flex items-start gap-3 rounded-lg border bg-card px-4 py-3 text-sm">
+                      <span className={cn("mt-0.5 [&_svg]:size-4", DECISION[decision].text)}>{decision === "adatto" ? <CircleCheck /> : <CircleHelp />}</span>
+                      {r}
+                    </div>
+                  )) : (
+                    <div className="flex items-start gap-3 rounded-lg border border-dashed border-unknown-border bg-card px-4 py-3 text-sm text-unknown-foreground">
+                      <CircleHelp className="mt-0.5 size-4" /> Dati insufficienti: l’analisi AI non c’è ancora.
+                    </div>
+                  )}
+                </section>
+
+                {facts.length > 0 && (
+                  <section className="space-y-2">
+                    <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Fatti estratti</h3>
+                    <ul className="divide-y rounded-lg border bg-card px-4 text-[13px]">
+                      {facts.map((f) => <li key={f} className="py-2.5">{f}</li>)}
+                      {item.cpv && <li className="py-2.5 font-mono">CPV {item.cpv}</li>}
+                    </ul>
+                  </section>
+                )}
+
+                {item.body && (
+                  <section className="space-y-2">
+                    <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Testo</h3>
+                    <p className="text-sm leading-relaxed whitespace-pre-line text-muted-foreground">{item.body}</p>
+                  </section>
+                )}
+              </div>
+            </ScrollArea>
+
+            <div className="flex justify-end gap-3 border-t bg-card px-6 py-4">
+              {state === "open" && <>
+                <Button variant="ghost" className="h-10 px-4" onClick={() => act(onDismiss)}><X /> Scarta</Button>
+                <Button variant="outline" className="h-10 px-4" onClick={() => act(onLike)}><Bookmark /> Preferito</Button>
+              </>}
+              {state !== "open" && <Button variant="outline" className="h-10 px-4" onClick={() => act(onRestore)}><Undo2 /> {state === "saved" ? "Togli dai preferiti" : "Rimetti nel feed"}</Button>}
+              {isUrl(item.url) && <Button className="h-10 px-5" render={<a href={item.url!} target="_blank" rel="noreferrer" />} nativeButton={false}>Apri alla fonte <ExternalLink /></Button>}
+            </div>
           </>
         )}
-        <div className="ml-auto flex shrink-0 gap-1">
-          {/^https?:\/\//i.test(item.url ?? "") && (
-            <CardAction label="Apri alla fonte" render={<a href={item.url!} target="_blank" rel="noreferrer" />}>
-              <ExternalLink />
-            </CardAction>
-          )}
-          {item.verdict === null && view !== "archived" ? (
-            <>
-              <CardAction label="Scarta" onClick={onDismiss} className="hover:text-destructive"><X /></CardAction>
-              <CardAction label="Aggiungi ai preferiti" onClick={onLike} className="hover:text-rose-500"><Heart /></CardAction>
-            </>
-          ) : item.verdict === "like" ? (
-            <CardAction label="Togli dai preferiti" onClick={onRestore} className="text-rose-500">
-              <Heart className="fill-current" />
-            </CardAction>
-          ) : item.verdict === "dislike" ? (
-            <CardAction label="Rimetti nel feed" onClick={onRestore}><Undo2 /></CardAction>
-          ) : null}
-        </div>
-      </footer>
-    </article>
+      </SheetContent>
+    </Sheet>
   );
-}
-
-function Meta({ icon, className, children }: { icon: React.ReactNode; className?: string; children: React.ReactNode }) {
-  return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0", className)}>
-      {icon}
-      <span className="truncate">{children}</span>
-    </span>
-  );
-}
-
-function CardAction({
-  label,
-  onClick,
-  className,
-  render,
-  children,
-}: {
-  label: string;
-  onClick?: () => void;
-  className?: string;
-  render?: React.ReactElement;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick} render={render} nativeButton={!render}
-            className={cn("text-muted-foreground", className)} />
-        }
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-const GRID = "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3";
-
-export function ItemList({
-  items,
-  loading,
-  empty,
-  renderItem,
-}: {
-  items: AreaItem[];
-  loading?: boolean;
-  empty: React.ReactNode;
-  renderItem: (item: AreaItem) => React.ReactNode;
-}) {
-  if (loading) {
-    return (
-      <div className={GRID}>
-        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-56 rounded-xl" />)}
-      </div>
-    );
-  }
-  if (items.length === 0) return <>{empty}</>;
-  return <div className={GRID}>{items.map(renderItem)}</div>;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AppHeader, AREAS, type Area } from "./components/AppHeader";
+import { AREAS, type Area } from "./components/AppHeader";
 import { LavoroArea } from "./components/LavoroArea";
 import { PaArea } from "./components/pa/PaArea";
 import { GareArea } from "./components/gare/GareArea";
@@ -21,14 +21,7 @@ export default function App() {
     setArea(next);
   };
 
-  if (area === "lavoro") return <LavoroArea onArea={changeArea} />;
-
-  return (
-    <div className="min-h-screen">
-      <AppHeader area={area} onArea={changeArea} />
-      <main className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6">
-        {area === "pa" ? <PaArea /> : <GareArea />}
-      </main>
-    </div>
-  );
+  if (area === "pa") return <PaArea onArea={changeArea} />;
+  if (area === "gare") return <GareArea onArea={changeArea} />;
+  return <LavoroArea onArea={changeArea} />;
 }

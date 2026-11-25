@@ -1,121 +1,57 @@
-import { Loader2, Moon, Search, Sparkles, Sun } from "lucide-react";
+import { AlertTriangle, Briefcase, Gavel, Landmark, Loader2, Moon, Sparkles, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { StatusResponse } from "../api/types";
+import { Logo } from "./shell/Logo";
 
 export type Area = "lavoro" | "pa" | "gare";
 
-export const AREAS: { area: Area; label: string; short: string }[] = [
-  { area: "lavoro", label: "Lavoro", short: "Lavoro" },
-  { area: "pa", label: "Concorsi PA", short: "PA" },
-  { area: "gare", label: "Gare P.IVA", short: "Gare" },
+export const AREAS: { area: Area; label: string; short: string; icon: ReactNode; accent: string; soft: string }[] = [
+  { area: "lavoro", label: "Lavoro", short: "Lavoro", icon: <Briefcase />, accent: "text-area-lavoro", soft: "bg-area-lavoro-soft" },
+  { area: "pa", label: "Concorsi PA", short: "PA", icon: <Landmark />, accent: "text-area-pa", soft: "bg-area-pa-soft" },
+  { area: "gare", label: "Gare P.IVA", short: "Gare", icon: <Gavel />, accent: "text-area-gare", soft: "bg-area-gare-soft" },
 ];
+
+export const areaInfo = (area: Area) => AREAS.find((a) => a.area === area)!;
 
 export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "freehire" | "cvs" | "analytics" | "logs";
 
-const NAV: { view: View; label: string }[] = [
-  { view: "feed", label: "Offerte" },
-  { view: "new", label: "Nuove" },
-  { view: "saved", label: "Preferiti" },
-  { view: "dismissed", label: "Scartate" },
-  { view: "archived", label: "Archivio" },
-  { view: "applications", label: "Candidature" },
-  { view: "freehire", label: "Cerca su freehire" },
-  { view: "cvs", label: "CV" },
-  { view: "analytics", label: "Analytics" },
-  { view: "logs", label: "Log" },
-];
-
-interface Props {
-  area: Area;
-  onArea: (area: Area) => void;
-  // Lavoro-only navigation; the other areas have their own tabs in the page.
-  view?: View;
-  onNav?: (view: View) => void;
-  counts?: Partial<Record<View, number>>;
-  status?: StatusResponse;
-  logErrors?: boolean;
-}
-
-export function AppHeader({ area, onArea, view, onNav, counts = {}, status, logErrors }: Props) {
+/** Black header: logo, area switch, AI status, theme. The views live in the sidebar. */
+export function AppHeader({ area, onArea, status }: { area: Area; onArea: (area: Area) => void; status?: StatusResponse }) {
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
-        <div className="flex items-center gap-2 font-semibold">
-          <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Search className="size-4" strokeWidth={2.5} />
-          </span>
-          <span className="hidden md:inline">JobSpy</span>
-        </div>
-
-        <AreaSwitch area={area} onArea={onArea} />
-
-        <nav className="-mb-px flex h-full min-w-0 flex-1 gap-1 overflow-x-auto">
-          {onNav && NAV.map(({ view: v, label }) => {
-            const active = v === view;
-            const count = counts[v];
+    <div className="flex h-16 items-center justify-between gap-3 px-4 sm:px-8">
+      <div className="flex min-w-0 items-center gap-4 lg:gap-10">
+        <Logo onDark />
+        <nav aria-label="Area" className="flex gap-1">
+          {AREAS.map((a) => {
+            const on = a.area === area;
             return (
               <button
-                key={v}
+                key={a.area}
                 type="button"
-                onClick={() => onNav(v)}
-                aria-current={active ? "page" : undefined}
+                onClick={() => onArea(a.area)}
+                aria-current={on ? "page" : undefined}
                 className={cn(
-                  "flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-sm transition-colors outline-none focus-visible:text-foreground",
-                  active
-                    ? "border-primary font-medium text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
+                  "flex h-10 items-center gap-2 rounded-full px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:px-3.5 [&_svg]:size-4",
+                  on ? "bg-header-field font-semibold text-header-foreground" : "font-medium text-header-muted hover:text-header-foreground",
                 )}
               >
-                {label}
-                {count != null && count > 0 && (
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 text-[11px] leading-4 tabular-nums",
-                      active ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {count}
-                  </span>
-                )}
-                {v === "logs" && logErrors && (
-                  <span className="size-1.5 rounded-full bg-destructive" aria-label="errori recenti" />
-                )}
+                <span className={on ? a.accent : undefined}>{a.icon}</span>
+                <span className="sm:hidden">{a.short}</span>
+                <span className="hidden sm:inline">{a.label}</span>
               </button>
             );
           })}
         </nav>
-
-        <div className="flex items-center gap-1">
-          {status && <AiStatus status={status} />}
-          <ThemeToggle />
-        </div>
       </div>
-    </header>
-  );
-}
-
-function AreaSwitch({ area, onArea }: { area: Area; onArea: (area: Area) => void }) {
-  return (
-    <nav aria-label="Area" className="flex shrink-0 rounded-lg bg-muted p-0.5">
-      {AREAS.map((a) => (
-        <button
-          key={a.area}
-          type="button"
-          onClick={() => onArea(a.area)}
-          aria-current={a.area === area ? "page" : undefined}
-          className={cn(
-            "rounded-md px-2 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:px-2.5",
-            a.area === area ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <span className="sm:hidden">{a.short}</span>
-          <span className="hidden sm:inline">{a.label}</span>
-        </button>
-      ))}
-    </nav>
+      <div className="flex items-center gap-2">
+        {status && <AiStatus status={status} />}
+        <ThemeToggle />
+      </div>
+    </div>
   );
 }
 
@@ -131,21 +67,18 @@ function AiStatus({ status }: { status: StatusResponse }) {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={
-          <span
-            className={cn(
-              "hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs sm:flex",
-              ok ? "text-muted-foreground" : "bg-destructive/10 text-destructive",
-            )}
-          />
-        }
+        render={<span className="hidden items-center gap-1.5 rounded-full bg-header-field px-3 py-1.5 text-xs font-medium sm:flex" />}
       >
-        {ok && pending > 0 ? (
-          <Loader2 className="size-3.5 animate-spin" />
+        {!ok ? (
+          <AlertTriangle className="size-3.5 text-deadline" />
+        ) : pending > 0 ? (
+          <Loader2 className="size-3.5 animate-spin text-header-muted" />
         ) : (
-          <Sparkles className="size-3.5" />
+          <Sparkles className="size-3.5 text-header-muted" />
         )}
-        {!ok ? "AI non attiva" : pending > 0 ? `AI: ${pending} in coda` : "AI attiva"}
+        <span className={ok ? "text-header-muted" : "text-header-foreground"}>
+          {!ok ? (status.analyzer_configured ? "AI senza CV" : "AI non configurata") : pending > 0 ? `AI: ${pending} in coda` : "AI attiva"}
+        </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-64">{text}</TooltipContent>
     </Tooltip>
@@ -164,6 +97,7 @@ function ThemeToggle() {
             size="icon"
             aria-label={dark ? "Tema chiaro" : "Tema scuro"}
             onClick={() => setTheme(dark ? "light" : "dark")}
+            className="size-9 bg-header-field text-header-foreground hover:bg-header-field hover:text-header-foreground"
           />
         }
       >
