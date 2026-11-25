@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import io
 import math
+import mimetypes
 import os
 import threading
 import time
@@ -56,6 +57,7 @@ import cv_render
 import cv_review
 import gare
 import pa
+import push
 import storage
 
 app = FastAPI(title="JobSpy Web", version="2.0.0")
@@ -190,6 +192,7 @@ def _startup() -> None:
     storage.mark_interrupted_logs()
     for area in _AREAS:
         area.store.init_tables()
+    push.init_tables()
     # Re-read the mounted CV at every start: a changed PDF becomes a new CV
     # version (older analyses stay linked to the CV they were made with).
     try:
@@ -357,6 +360,9 @@ def _analysis_worker(trigger: str) -> None:
             _analyze_backlog(trigger)
         except Exception:
             traceback.print_exc()
+        # Lavoro decisions exist only after the background analysis, so its push goes here.
+        if trigger == "scheduler":
+            push.notify(["lavoro"], _AREAS)
 
 
 def _kick_analysis(trigger: str = "manual") -> None:
@@ -465,6 +471,7 @@ def _refresh_all_channels() -> None:
     _kick_analysis(trigger="scheduler")
     _archive_stale(trigger="scheduler")
     _refresh_areas(trigger="scheduler")
+    push.notify(["pa", "gare"], _AREAS)
     try:
         print("[scheduler] backup: %s" % storage.backup_db("daily"), flush=True)
     except Exception:
@@ -1217,6 +1224,10 @@ def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
 
 app.include_router(pa.router)
 app.include_router(gare.router)
+app.include_router(push.router)
+
+# PWA manifest: not in Python's default MIME table.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 # Serve the SPA. Mounted last so API routes take precedence.
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

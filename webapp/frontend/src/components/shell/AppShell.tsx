@@ -34,7 +34,7 @@ export function AppShell<K extends string>({ area, onArea, status, nav, active, 
   const a = areaInfo(area);
   return (
     <div className="min-h-screen pb-20 md:pb-0">
-      <header className="bg-header">
+      <header className="bg-header pt-[env(safe-area-inset-top)]">
         <AppHeader area={area} onArea={onArea} status={status} />
         {filterBar}
       </header>

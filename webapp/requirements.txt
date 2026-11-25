@@ -12,6 +12,9 @@ reportlab>=4.0,<5
 pypdf>=5,<7
 pypdfium2>=4.30,<6
 
+# Web Push notifications for the installed PWA (VAPID keys from env)
+pywebpush>=2.0,<3
+
 # JobSpy library dependencies (installed from the local ../jobspy package)
 requests>=2.31.0
 beautifulsoup4>=4.12.2

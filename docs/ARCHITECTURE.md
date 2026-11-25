@@ -156,6 +156,13 @@ Stessa app, stesso DB e stesso login; codice, tabelle, API e pagine separati
   decisione adatto / da valutare / non adatto è codice contro il profilo dell'area (in `meta`).
 - TED contiene solo gare sopra soglia UE: per una P.IVA sono soprattutto subappalto o raggruppamento.
 
+## PWA e notifiche push (25/11/2026)
+
+JobSpy si installa sulla schermata Home (manifest, `/sw.js` solo per push). `webapp/push.py` tiene le
+sottoscrizioni (`push_subscriptions`) e cosa è già stato notificato (`push_sent`); dopo il giro dello scheduler
+manda al massimo una notifica per area ogni 12 ore, solo con novità, riusando le decisioni esistenti.
+Chiavi VAPID solo da env. Dettagli in [spec 005](../specs/005-pwa-notifiche/spec.md).
+
 ## Stack
 
 | Parte | Scelta |
