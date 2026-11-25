@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import re
 import time
+from datetime import date
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -68,7 +69,9 @@ class FreehireClient:
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self.session = session or with_retry(requests.Session())
-        self.session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+        self.session.headers.update(
+            {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        )
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -77,10 +80,11 @@ class FreehireClient:
             raise FreehireError(f"freehire: request failed - {exc}") from exc
         if response.status_code != 200:
             raise FreehireError(
-                f"freehire: HTTP {response.status_code} on {path}", status=response.status_code
+                f"freehire: HTTP {response.status_code} on {path}",
+                status=response.status_code,
             )
         try:
-            data = response.json()
+            data: dict[str, Any] = response.json()
         except ValueError as exc:
             raise FreehireError(f"freehire: invalid JSON on {path}") from exc
         meta = data.get("meta") or {}
@@ -93,13 +97,18 @@ class FreehireClient:
         return self._get("/jobs/search", params)
 
     def job(self, slug: str) -> dict[str, Any]:
-        return self._get(f"/jobs/{slug}")["data"]
+        data: dict[str, Any] = self._get(f"/jobs/{slug}")["data"]
+        return data
 
     def companies(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self._get("/companies", {"q": query, "limit": limit}).get("data", [])
+        data: list[dict[str, Any]] = self._get(
+            "/companies", {"q": query, "limit": limit}
+        ).get("data", [])
+        return data
 
     def company(self, slug: str) -> dict[str, Any]:
-        return self._get(f"/companies/{slug}")["data"]
+        data: dict[str, Any] = self._get(f"/companies/{slug}")["data"]
+        return data
 
 
 def location_filter(location: str | None) -> dict[str, str]:
@@ -116,14 +125,20 @@ def location_filter(location: str | None) -> dict[str, str]:
     return {"cities": text.split(",")[0].strip()}
 
 
-def normalize_url(url: str | None, origin: str | None = None, external_id: str | None = None) -> str | None:
+def normalize_url(
+    url: str | None, origin: str | None = None, external_id: str | None = None
+) -> str | None:
     """The posting's own URL, matching what JobSpy's scrapers store."""
     if origin == "linkedin" and external_id and str(external_id).isdigit():
         return f"https://www.linkedin.com/jobs/view/{external_id}"
     if not url:
         return None
     parts = urlsplit(url)
-    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.startswith("utm_")]
+    query = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if not k.startswith("utm_")
+    ]
     path = parts.path.rstrip("/") or parts.path
     return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), ""))
 
@@ -138,7 +153,10 @@ def is_suspect(raw: dict[str, Any]) -> bool:
 def _requirements(raw: dict[str, Any]) -> list[dict[str, str]]:
     items = (raw.get("enrichment") or {}).get("requirements") or []
     return [
-        {"text": str(r.get("text")).strip(), "priority": r.get("priority") or "required"}
+        {
+            "text": str(r.get("text")).strip(),
+            "priority": r.get("priority") or "required",
+        }
         for r in items
         if isinstance(r, dict) and r.get("text")
     ]
@@ -148,7 +166,10 @@ def _description(raw: dict[str, Any], fmt: DescriptionFormat) -> str | None:
     text = description_text(raw.get("description"), fmt) or ""
     reqs = _requirements(raw)
     if reqs:
-        lines = [f"- [{_PRIORITY_LABEL.get(r['priority'], r['priority'])}] {r['text']}" for r in reqs]
+        lines = [
+            f"- [{_PRIORITY_LABEL.get(r['priority'], r['priority'])}] {r['text']}"
+            for r in reqs
+        ]
         text = f"{text.rstrip()}\n\n## {REQUIREMENTS_HEADING}\n" + "\n".join(lines)
     return text.strip() or None
 
@@ -162,7 +183,9 @@ def _location(raw: dict[str, Any]) -> Location | None:
     return Location(city=text)
 
 
-def to_post(raw: dict[str, Any], fmt: DescriptionFormat = DescriptionFormat.MARKDOWN) -> JobPost | None:
+def to_post(
+    raw: dict[str, Any], fmt: DescriptionFormat = DescriptionFormat.MARKDOWN
+) -> JobPost | None:
     """Map one freehire posting to a JobPost (None when unusable)."""
     origin = raw.get("source")
     job_url = normalize_url(raw.get("url"), origin, raw.get("external_id"))
@@ -170,7 +193,8 @@ def to_post(raw: dict[str, Any], fmt: DescriptionFormat = DescriptionFormat.MARK
     if not job_url or not title:
         return None
     enrichment = raw.get("enrichment") or {}
-    posted = (raw.get("posted_at") or raw.get("created_at") or "")[:10] or None
+    stamp = (raw.get("posted_at") or raw.get("created_at") or "")[:10]
+    posted = date.fromisoformat(stamp) if stamp else None
     return JobPost(
         id=f"freehire-{raw.get('public_slug')}",
         title=title,
@@ -199,8 +223,12 @@ def to_source_row(raw: dict[str, Any], job_url: str) -> dict[str, Any]:
         "salary_min": enrichment.get("salary_min"),
         "salary_max": enrichment.get("salary_max"),
         "salary_currency": enrichment.get("salary_currency"),
-        "salary_interval": (_PERIODS.get(enrichment.get("salary_period") or "") or CompensationInterval.YEARLY).value
-        if enrichment.get("salary_min") or enrichment.get("salary_max") else None,
+        "salary_interval": (
+            _PERIODS.get(enrichment.get("salary_period") or "")
+            or CompensationInterval.YEARLY
+        ).value
+        if enrichment.get("salary_min") or enrichment.get("salary_max")
+        else None,
         "skills": [str(s) for s in raw.get("skills") or []],
         "requirements": _requirements(raw),
         "category": enrichment.get("category"),
@@ -256,8 +284,12 @@ def check_city(client: FreehireClient, params: dict[str, Any]) -> None:
     """freehire answers 0 results, not an error, for a city it does not know:
     after an empty search, ask whether the city has any posting at all."""
     city = params.get("cities")
-    if city and not (client.search({"cities": city, "limit": 1}).get("meta") or {}).get("total"):
-        raise FreehireError(f"freehire does not know the city '{city}' (use Italia, Europa or a known city)")
+    if city and not (client.search({"cities": city, "limit": 1}).get("meta") or {}).get(
+        "total"
+    ):
+        raise FreehireError(
+            f"freehire does not know the city '{city}' (use Italia, Europa or a known city)"
+        )
 
 
 def _rows(
@@ -290,7 +322,9 @@ class Freehire(Scraper):
             scraper_input.hours_old,
         )
         try:
-            postings = fetch_postings(client, params, scraper_input.results_wanted or 15)
+            postings = fetch_postings(
+                client, params, scraper_input.results_wanted or 15
+            )
             if not postings:
                 check_city(client, params)
         except FreehireError as exc:
@@ -321,7 +355,9 @@ def scrape_freehire(
     sources: list[dict[str, Any]] = []
     posts: list[JobPost] = []
     try:
-        params = search_params(search_term, location, is_remote, hours_old, company_slug)
+        params = search_params(
+            search_term, location, is_remote, hours_old, company_slug
+        )
         postings = fetch_postings(client, params, results_wanted)
         if company_slug and not postings:
             client.company(company_slug)  # 404 -> FreehireError: the company is gone
@@ -332,9 +368,17 @@ def scrape_freehire(
         errors["freehire"] = str(exc)
     origin = {row["job_url"]: row["origin"] for row in sources}
     rows = [
-        p.model_copy(update={"site": "linkedin" if origin.get(p.job_url) == "linkedin" else "freehire"})
+        p.model_copy(
+            update={
+                "site": "linkedin"
+                if origin.get(p.job_url) == "linkedin"
+                else "freehire"
+            }
+        )
         for p in posts
     ]
-    df = pd.DataFrame([p.model_dump() for p in rows], columns=list(JobPost.model_fields))
+    df = pd.DataFrame(
+        [p.model_dump() for p in rows], columns=list(JobPost.model_fields)
+    )
     df.attrs = {"errors": errors, "warnings": {}, "source_rows": sources}
     return df

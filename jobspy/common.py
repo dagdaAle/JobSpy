@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TypeVar
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from jobspy.model import DescriptionFormat
-from jobspy.util import RequestsRotating, description_fields
+from jobspy.util import description_fields
+
+S = TypeVar("S", bound=requests.Session)
 
 
-def with_retry(session: RequestsRotating) -> RequestsRotating:
+def with_retry(session: S) -> S:
     """Retry network errors and 5xx up to 3 times with backoff, POST included."""
     adapter = HTTPAdapter(
         max_retries=Retry(
