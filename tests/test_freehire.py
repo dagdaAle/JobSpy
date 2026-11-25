@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'webapp'), str(ROOT)]
 import storage
 from jobspy.freehire import (
-    FreehireClient, FreehireError, Freehire, location_filter, normalize_url, scrape_freehire,
+    FreehireClient, FreehireError, Freehire, location_filter, location_match, normalize_url,
+    scrape_freehire,
 )
 from jobspy.model import ScraperInput
 
@@ -59,6 +60,19 @@ class FreehireMappingTests(unittest.TestCase):
         self.assertEqual(location_filter('Italia'), {'countries': 'it'})
         self.assertEqual(location_filter(' Europe '), {'regions': 'eu'})
         self.assertEqual(location_filter('Verona, Veneto, Italia'), {'cities': 'verona'})
+
+    def test_location_match(self):
+        self.assertIsNone(location_match('Italia'))
+        self.assertIsNone(location_match(''))
+        any_verona = location_match('Verona')
+        self.assertTrue(any_verona.search('Verona, WI, US'))
+        self.assertFalse(any_verona.search('Rieti, IT'))
+        italian = location_match('Verona, Italia')
+        for ok in ('Verona, Italy', 'Verona, IT, 37122', 'Verona',
+                   'Milan, Italy; Verona, Province of Verona, Italy'):
+            self.assertTrue(italian.search(ok), ok)
+        for ko in ('Verona, WI, US', 'Verona, New York', 'Rieti, IT', 'Veronaville, Italy'):
+            self.assertFalse(italian.search(ko), ko)
 
     def test_normalize_url(self):
         self.assertEqual(normalize_url('https://x.example/a/?utm_source=freehire.me&id=3'),
