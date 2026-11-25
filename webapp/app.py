@@ -54,6 +54,8 @@ import analyzer
 import channel_filters
 import cv_render
 import cv_review
+import gare
+import pa
 import storage
 
 app = FastAPI(title="JobSpy Web", version="2.0.0")
@@ -186,6 +188,8 @@ def _check_company_slug(site: str, company_slug: str | None) -> None:
 def _startup() -> None:
     storage.init_db()
     storage.mark_interrupted_logs()
+    for area in _AREAS:
+        area.store.init_tables()
     # Re-read the mounted CV at every start: a changed PDF becomes a new CV
     # version (older analyses stay linked to the CV they were made with).
     try:
@@ -418,6 +422,21 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
     return new_count
 
 
+# The non-job areas (Concorsi PA, Gare P.IVA): own tables, API and pages.
+_AREAS = (pa.AREA, gare.AREA)
+
+
+def _refresh_areas(trigger: str) -> None:
+    """Refresh and analyze each area; one failing area never stops the others (ADR 004)."""
+    for area in _AREAS:
+        try:
+            area.refresh_all(trigger)
+            area.analyze_pending(trigger)
+        except Exception:
+            print("[scheduler] area %s failed:" % area.store.p, flush=True)
+            traceback.print_exc()
+
+
 def _seconds_until_next_run() -> float:
     """Seconds from now until the next _REFRESH_HOUR:_REFRESH_MINUTE (local time)."""
     now = datetime.datetime.now()
@@ -445,6 +464,7 @@ def _refresh_all_channels() -> None:
     _check_source_closures(trigger="scheduler")
     _kick_analysis(trigger="scheduler")
     _archive_stale(trigger="scheduler")
+    _refresh_areas(trigger="scheduler")
     try:
         print("[scheduler] backup: %s" % storage.backup_db("daily"), flush=True)
     except Exception:
@@ -1194,6 +1214,9 @@ def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
                               job_url=req.job_url, changes=out["changes"], template=base["template"])
     return {"cv": storage.get_cv(cv_id)}
 
+
+app.include_router(pa.router)
+app.include_router(gare.router)
 
 # Serve the SPA. Mounted last so API routes take precedence.
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

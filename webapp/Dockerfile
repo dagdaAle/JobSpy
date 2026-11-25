@@ -27,6 +27,8 @@ RUN pip install --no-cache-dir --no-deps /src
 
 # 3) Copy the web app itself (every module, so new files are never left out).
 COPY webapp/*.py /app/
+COPY webapp/pa /app/pa
+COPY webapp/gare /app/gare
 COPY --from=frontend /static /app/static
 
 # Feedback DB lives here (mounted as a volume in docker-compose).
