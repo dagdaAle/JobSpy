@@ -1,5 +1,6 @@
-import { Tag, Wallet } from "lucide-react";
+import { Tag } from "lucide-react";
 import { AreaPage, type AreaConfig } from "../area/AreaPage";
+import type { Area } from "../AppHeader";
 
 const SOURCES: Record<string, string> = { ted: "TED · Gazzetta UE" };
 const sourceLabel = (s: string) => SOURCES[s] ?? s;
@@ -51,9 +52,17 @@ const config: AreaConfig = {
   ],
   profileHint: "Il profilo decide l'esito di ogni gara (servizi, fatturato, certificazioni). Cambiarlo non richiede una nuova analisi.",
   itemMeta: (item) => [
-    ...(item.amount != null ? [{ icon: <Wallet />, text: euro(item.amount, item.currency) }] : []),
     ...(item.cpv ? [{ icon: <Tag />, text: `CPV ${item.cpv}` }] : []),
   ],
+  itemNumber: (item) => ({ value: item.amount != null ? euro(item.amount, item.currency) : null, unit: item.amount != null ? "importo stimato" : undefined, unknown: "Importo non indicato" }),
+  range: {
+    label: "Importo massimo",
+    max: 5_000_000,
+    step: 100_000,
+    format: (v) => (v ? euro(v, "EUR") : "qualsiasi"),
+    // Unknown amounts stay.
+    keep: (item, v) => item.amount == null || item.amount <= v,
+  },
   itemFacts: (f) => {
     const out: string[] = [];
     if (Array.isArray(f.servizi) && f.servizi.length) out.push(`Servizi: ${f.servizi.join(", ")}`);
@@ -63,6 +72,6 @@ const config: AreaConfig = {
   },
 };
 
-export function GareArea() {
-  return <AreaPage config={config} />;
+export function GareArea({ onArea }: { onArea: (area: Area) => void }) {
+  return <AreaPage config={config} onArea={onArea} />;
 }

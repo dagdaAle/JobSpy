@@ -63,15 +63,23 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
 
-/** Compact salary label, e.g. "€40–48k". */
+/** Compact salary label, e.g. "40–48k €". */
 export function salaryLabel(job: Job): string | null {
   const { salary_min, salary_max, salary_currency } = job;
   if (!salary_min && !salary_max) return null;
   const sym = salary_currency === "USD" ? "$" : salary_currency === "GBP" ? "£" : "€";
   const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n)));
   if (salary_min && salary_max && salary_min !== salary_max)
-    return `${sym}${k(salary_min).replace("k", "")}–${k(salary_max)}`;
-  return `${sym}${k((salary_min ?? salary_max) as number)}`;
+    return `${k(salary_min).replace("k", "")}–${k(salary_max)} ${sym}`;
+  return `${k((salary_min ?? salary_max) as number)} ${sym}`;
+}
+
+/** Yearly gross pay for the "RAL minima" filter; null when unknown or not yearly (never treated as low). */
+export function yearlySalary(job: Job): number | null {
+  const v = job.salary_max ?? job.salary_min;
+  if (!v) return null;
+  // shortcut: hourly/monthly figures are not converted, they just skip the filter; convert if they become common
+  return !job.salary_interval || job.salary_interval === "yearly" ? v : null;
 }
 
 /** Parse the comma/JSON-ish skills string into a tidy list. */

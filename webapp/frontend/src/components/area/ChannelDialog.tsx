@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { CircleHelp, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { AreaLabel } from "../AppHeader";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AreaChannelRequest, AreaKey, AreaMeta } from "../../api/areas";
@@ -52,9 +54,10 @@ export function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !create.isPending && onOpenChange(o)}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl max-sm:h-dvh max-sm:max-w-full max-sm:rounded-none max-sm:overflow-y-auto">
         <form onSubmit={submit} className="grid gap-5">
           <DialogHeader>
+            <AreaLabel area={area} />
             <DialogTitle>Nuovo canale</DialogTitle>
             <DialogDescription>
               Un canale è una ricerca su una fonte, aggiornata ogni mattina. La prima ricerca parte subito.
@@ -68,7 +71,12 @@ export function ChannelDialog({
             ))}
           </div>
 
-          {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+          {hint && (
+            <p className={cn("flex items-start gap-2.5 rounded-md p-3 text-[13px] leading-relaxed", area === "pa" ? "bg-area-pa-soft" : "bg-area-gare-soft")}>
+              <CircleHelp className={cn("mt-0.5 size-4 shrink-0", area === "pa" ? "text-area-pa" : "text-area-gare")} />
+              {hint}
+            </p>
+          )}
           {create.isError && <p className="text-sm text-destructive">{(create.error as Error).message}</p>}
 
           <DialogFooter>
