@@ -37,6 +37,45 @@ export interface Job {
   salary_max?: number | null;
   salary_currency?: string | null;
   salary_interval?: string | null;
+  // freehire catalogue data (cards and detail).
+  source_origin?: string | null;
+  source_suspect?: boolean;
+  source_closed_at?: string | null;
+  source?: JobSource | null;
+}
+
+export interface JobSource {
+  slug: string;
+  origin: string | null;
+  requirements: { text: string; priority: "required" | "preferred" }[];
+  suspect: boolean;
+  reality: { repost_count?: number; mass_posting_count?: number; fake_freshness?: boolean };
+  closed_at: string | null;
+  category: string | null;
+}
+
+export interface FreehireCompany {
+  slug: string;
+  name: string;
+  job_count: number | null;
+  tagline: string | null;
+}
+
+export interface FreehireResult {
+  slug: string;
+  job_url: string;
+  title: string;
+  company: string | null;
+  location: string;
+  is_remote: boolean | null;
+  origin: string | null;
+  posted_at: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  skills: string[];
+  suspect: boolean;
+  in_db: boolean;
 }
 
 export interface Analysis {
@@ -80,6 +119,7 @@ export interface Channel {
   exclude_keywords?: string[];
   exclude_companies?: string[];
   work_mode?: WorkMode;
+  company_slug?: string;
   created_at?: string;
   // Counts only jobs still to review (no like/dislike yet).
   total_count?: number;
@@ -112,6 +152,7 @@ export interface ChannelRequest {
   exclude_keywords?: string[];
   exclude_companies?: string[];
   work_mode?: WorkMode;
+  company_slug?: string;
 }
 
 // Envelope shared by /search, /jobs and /channels/{id}/jobs.
@@ -197,7 +238,7 @@ export interface LogEntry {
   started_at: string;
   finished_at: string;
   kind: "refresh" | "analysis" | "archive" | "purge";
-  trigger: "scheduler" | "manual" | "create" | "startup";
+  trigger: "scheduler" | "manual" | "create" | "startup" | "source_closed" | "freehire_save";
   channel_id: number | null;
   channel_name: string | null;
   site: string | null;

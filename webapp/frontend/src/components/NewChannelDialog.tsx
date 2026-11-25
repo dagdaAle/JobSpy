@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { Channel, WorkMode } from "../api/types";
+import { api } from "../api/client";
+import type { Channel, FreehireCompany, WorkMode } from "../api/types";
 import { useCreateChannel, useUpdateChannel } from "../hooks";
 import { siteLabel } from "../lib/format";
 
@@ -31,6 +32,7 @@ const INITIAL = {
   exclude_keywords: "senior, lead, staff, principal, stage, tirocinio",
   exclude_companies: "",
   work_mode: "any" as WorkMode,
+  company_slug: "",
 };
 
 const WORK_MODES: { value: WorkMode; label: string }[] = [
@@ -56,6 +58,7 @@ function fromChannel(ch: Channel): typeof INITIAL {
     exclude_keywords: fromList(ch.exclude_keywords),
     exclude_companies: fromList(ch.exclude_companies),
     work_mode: ch.work_mode ?? "any",
+    company_slug: ch.company_slug ?? "",
   };
 }
 
@@ -91,6 +94,7 @@ export function NewChannelDialog({
       include_keywords: toList(form.include_keywords),
       exclude_keywords: toList(form.exclude_keywords),
       exclude_companies: toList(form.exclude_companies),
+      company_slug: form.site === "freehire" && followCompany ? form.company_slug : "",
     };
     if (channel) {
       update.mutate(
@@ -117,6 +121,18 @@ export function NewChannelDialog({
   };
 
   const remoteBoard = ["remotive", "remoteok", "weworkremotely", "workingnomads"].includes(form.site);
+  const freehire = form.site === "freehire";
+  const [followCompany, setFollowCompany] = useState(false);
+  const [companies, setCompanies] = useState<FreehireCompany[]>([]);
+  const [companyQuery, setCompanyQuery] = useState("");
+  useEffect(() => {
+    if (open) setFollowCompany(Boolean(channel?.company_slug));
+  }, [open, channel]);
+  const findCompanies = () => {
+    if (!companyQuery.trim()) return;
+    api.freehireCompanies(companyQuery.trim()).then((r) => setCompanies(r.companies))
+      .catch((e: Error) => toast.error(e.message));
+  };
   const siteItems = sites.map((s) => ({ value: s, label: siteLabel(s) }));
 
   return (
@@ -133,7 +149,42 @@ export function NewChannelDialog({
           </DialogHeader>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Cosa cerchi" className="sm:col-span-2">
+            {freehire && (
+              <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 sm:col-span-2">
+                <span className="text-sm">Segui un’azienda (tutte le sue offerte aperte)</span>
+                <Switch checked={followCompany} onCheckedChange={(v) => {
+                  setFollowCompany(v);
+                  // A followed company is searched everywhere unless a zone is set on purpose.
+                  setForm((f) => ({ ...f, company_slug: v ? f.company_slug : "", location: v ? "" : f.location }));
+                }} />
+              </label>
+            )}
+            {freehire && followCompany && (
+              <Field label="Azienda" className="sm:col-span-2">
+                <div className="flex gap-2">
+                  <Input placeholder="es. nome dell’azienda" value={companyQuery}
+                    onChange={(e) => setCompanyQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); findCompanies(); } }} />
+                  <Button type="button" variant="outline" onClick={findCompanies}>Cerca</Button>
+                </div>
+                {form.company_slug && (
+                  <p className="text-xs text-muted-foreground">Selezionata: {form.search_term} ({form.company_slug})</p>
+                )}
+                <ul className="grid max-h-48 gap-1 overflow-y-auto">
+                  {companies.map((c) => (
+                    <li key={c.slug}>
+                      <button type="button"
+                        className="w-full rounded-md border px-3 py-1.5 text-left text-sm hover:bg-muted aria-pressed:border-primary"
+                        aria-pressed={form.company_slug === c.slug}
+                        onClick={() => setForm((f) => ({ ...f, company_slug: c.slug, search_term: c.name }))}>
+                        {c.name} <span className="text-muted-foreground">· {c.job_count ?? 0} offerte aperte</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Field>
+            )}
+            {!(freehire && followCompany) && <Field label="Cosa cerchi" className="sm:col-span-2">
               <Input
                 autoFocus
                 required
@@ -141,7 +192,7 @@ export function NewChannelDialog({
                 value={form.search_term}
                 onChange={(e) => set("search_term", e.target.value)}
               />
-            </Field>
+            </Field>}
             <Field label="Sito">
               <Select items={siteItems} value={form.site} onValueChange={(v) => v && set("site", v)}>
                 <SelectTrigger className="w-full">
@@ -159,7 +210,7 @@ export function NewChannelDialog({
             <Field label={remoteBoard ? "Area candidati (vedi singole offerte)" : "Dove"}>
               <Input
                 disabled={remoteBoard}
-                placeholder="es. Verona, Veneto"
+                placeholder={freehire ? "Italia, Europa, una città o vuoto" : "es. Verona, Veneto"}
                 value={remoteBoard ? "Remoto: verifica paesi ammessi" : form.location}
                 onChange={(e) => set("location", e.target.value)}
               />
@@ -176,7 +227,7 @@ export function NewChannelDialog({
                 type="number"
                 min={1}
                 max={500}
-                disabled={remoteBoard}
+                disabled={remoteBoard || freehire}
                 value={form.distance_km}
                 onChange={(e) => set("distance_km", Number(e.target.value))}
               />

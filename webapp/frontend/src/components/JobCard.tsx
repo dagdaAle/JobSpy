@@ -44,6 +44,10 @@ export function JobCard({ job, analysis, mode, feedDays, onOpen, onLike, onDismi
           {job.is_new && (
             <Badge className="bg-primary/12 text-primary dark:bg-primary/15">Nuovo</Badge>
           )}
+          {job.source_closed_at && <Badge variant="destructive">Chiusa alla fonte</Badge>}
+          {!job.source_closed_at && job.source_suspect && (
+            <Badge variant="outline" className="border-amber-500 text-amber-700">Sospetta</Badge>
+          )}
         </header>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-muted-foreground">

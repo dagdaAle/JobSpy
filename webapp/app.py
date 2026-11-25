@@ -32,6 +32,15 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator
 
+from jobspy.freehire import (
+    FreehireClient,
+    check_city,
+    FreehireError,
+    fetch_postings,
+    search_params,
+    to_post,
+    to_source_row,
+)
 from jobspy.presets import (
     ITALY_EXTRA_SITES,
     ITALY_LOCAL_SITES,
@@ -148,6 +157,7 @@ class ChannelRequest(BaseModel):
     exclude_keywords: list[Keyword] = Field(default_factory=list, max_length=30)
     exclude_companies: list[Keyword] = Field(default_factory=list, max_length=30)
     work_mode: WorkMode = "any"
+    company_slug: str = Field("", max_length=200)
 
 
 class ChannelUpdate(BaseModel):
@@ -164,6 +174,12 @@ class ChannelUpdate(BaseModel):
     exclude_keywords: list[Keyword] | None = Field(None, max_length=30)
     exclude_companies: list[Keyword] | None = Field(None, max_length=30)
     work_mode: WorkMode | None = None
+    company_slug: str | None = Field(None, max_length=200)
+
+
+def _check_company_slug(site: str, company_slug: str | None) -> None:
+    if company_slug and site != "freehire":
+        raise HTTPException(status_code=422, detail="company_slug vale solo per i canali freehire.")
 
 
 @app.on_event("startup")
@@ -375,10 +391,19 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
                 results_wanted=channel.get("results_wanted") or 25,
                 hours_old=channel.get("hours_old"),
                 is_remote=bool(channel.get("is_remote")),
+                company_slug=channel.get("company_slug") or "",
             )
+            # A scraper that called fail() may still return the pages it got:
+            # keep them, but the run is an error, not a quiet "0 new".
+            errors = df.attrs.get("errors") or {}
+            scrape_error = "; ".join(f"{site}: {msg}" for site, msg in errors.items()) or None
             records = _with_raw(df, _FULL_COLUMNS)
             records, removed = channel_filters.filter_records(records, channel)
             new_count = storage.upsert_channel_jobs(channel["id"], records, run_id=log_id)
+            kept = {r["job_url"] for r in records}
+            storage.upsert_job_sources(
+                [row for row in df.attrs.get("source_rows") or [] if row["job_url"] in kept]
+            )
     except Exception as exc:
         storage.finish_log(log_id, {
             "status": "error", "error": str(exc)[:500],
@@ -386,7 +411,8 @@ def _refresh_channel(channel: dict[str, Any], trigger: str = "manual") -> int:
         })
         raise
     storage.finish_log(log_id, {
-        "status": "ok", "found": len(records) + removed, "new_count": new_count, "removed": removed,
+        "status": "error" if scrape_error else "ok", "error": (scrape_error or "")[:500] or None,
+        "found": len(records) + removed, "new_count": new_count, "removed": removed,
         "duration_ms": int((time.monotonic() - t0) * 1000),
     })
     return new_count
@@ -416,6 +442,7 @@ def _refresh_all_channels() -> None:
         except Exception:
             print("[scheduler] channel %s failed:" % channel.get("id"), flush=True)
             traceback.print_exc()
+    _check_source_closures(trigger="scheduler")
     _kick_analysis(trigger="scheduler")
     _archive_stale(trigger="scheduler")
     try:
@@ -439,6 +466,35 @@ def _archive_stale(days: int = _FEED_DAYS, trigger: str = "manual") -> int:
         "duration_ms": int((time.monotonic() - t0) * 1000),
     })
     print("[scheduler] archived %d jobs without a verdict after %d days" % (archived, days), flush=True)
+    return archived
+
+
+def _check_source_closures(trigger: str = "manual", client: FreehireClient | None = None) -> int:
+    """Ask freehire whether its jobs still in the feed have closed; archive the
+    closed ones without a verdict or application. Unanswered checks change nothing."""
+    jobs = storage.source_jobs_to_check()
+    if not jobs:
+        return 0
+    client = client or FreehireClient()
+    log_id = storage.start_log({"kind": "archive", "trigger": "source_closed", "found": len(jobs)})
+    t0 = time.monotonic()
+    archived = 0
+    error = None
+    for job in jobs:
+        try:
+            closed_at = client.job(job["slug"]).get("closed_at")
+        except FreehireError as exc:
+            if exc.status in (403, 429):
+                error = str(exc)  # back off until tomorrow (ADR 004)
+                break
+            continue
+        if closed_at != job["closed_at"]:
+            archived += storage.set_source_closed(job["job_url"], closed_at)
+    storage.finish_log(log_id, {
+        "status": "error" if error else "ok", "error": error, "removed": archived,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    })
+    print("[scheduler] %d jobs closed at the source archived (%s)" % (archived, trigger), flush=True)
     return archived
 
 
@@ -607,6 +663,7 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
     site = req.site.strip().lower()
     if site not in _ALL_SITES:
         raise HTTPException(status_code=422, detail=f"Sito non supportato: {site}")
+    _check_company_slug(site, req.company_slug)
 
     channel_id = storage.create_channel(
         site=site,
@@ -621,6 +678,7 @@ def create_channel(req: ChannelRequest) -> dict[str, Any]:
         exclude_keywords=req.exclude_keywords,
         exclude_companies=req.exclude_companies,
         work_mode=req.work_mode,
+        company_slug=req.company_slug,
     )
     channel = storage.get_channel(channel_id)
     try:
@@ -649,6 +707,9 @@ def update_channel(channel_id: int, req: ChannelUpdate) -> dict[str, Any]:
         fields["site"] = fields["site"].strip().lower()
         if fields["site"] not in _ALL_SITES:
             raise HTTPException(status_code=422, detail=f"Sito non supportato: {fields['site']}")
+    if fields.get("company_slug"):
+        site = fields.get("site") or storage.get_channel(channel_id)["site"]
+        _check_company_slug(site, fields["company_slug"])
     return {"channel": storage.update_channel(channel_id, fields)}
 
 
@@ -819,6 +880,101 @@ def save_application(req: ApplicationRequest) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(status_code=404, detail="Offerta non trovata")
     return {"ok": True}
+
+
+@app.post("/jobs/analyze")
+def analyze_job_now(url: str) -> dict[str, Any]:
+    """Analyze one job right away, even one kept out of the automatic queue."""
+    job = storage.get_job(url)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Offerta non trovata")
+    cv_text = storage.get_cv_text()
+    if not cv_text or not analyzer.is_configured():
+        raise HTTPException(status_code=409, detail="CV o analizzatore non configurati.")
+    if not _analyze_one(job, cv_text, storage.current_cv_version_id(), storage.analysis_context()):
+        raise HTTPException(status_code=502, detail="Analisi fallita, vedi /logs.")
+    return {"ok": True, "analysis": storage.get_all_analysis().get(url)}
+
+
+# ---------------------------------------------------------------------------
+# freehire: company search, on-the-fly search, save one result
+# ---------------------------------------------------------------------------
+
+def _freehire_call(fn: Any) -> Any:
+    try:
+        return fn()
+    except FreehireError as exc:
+        if exc.status == 404:
+            raise HTTPException(status_code=404, detail="Non trovato su freehire.") from exc
+        if exc.status is None and ("ignored a filter" in str(exc) or "does not know the city" in str(exc)):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/freehire/companies")
+def freehire_companies(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=50)) -> dict[str, Any]:
+    items = _freehire_call(lambda: FreehireClient().companies(q, limit))
+    return {"companies": [
+        {"slug": c.get("slug"), "name": c.get("name"), "job_count": c.get("job_count"), "tagline": c.get("tagline")}
+        for c in items
+    ]}
+
+
+@app.get("/freehire/search")
+def freehire_search(
+    q: str = "",
+    location: str = "",
+    remote: bool = False,
+    days: int | None = Query(None, ge=1, le=60),
+    company_slug: str = "",
+    limit: int = Query(25, ge=1, le=100),
+) -> dict[str, Any]:
+    """Search freehire without saving anything; marks results already stored."""
+    if not q and not company_slug:
+        raise HTTPException(status_code=422, detail="Serve q o company_slug.")
+    params = search_params(q, location, remote, days * 24 if days else None, company_slug)
+    client = FreehireClient()
+    postings = _freehire_call(lambda: fetch_postings(client, params, limit))
+    if not postings:
+        _freehire_call(lambda: check_city(client, params))
+    results = []
+    for raw in postings:
+        post = to_post(raw)
+        if post is None:
+            continue
+        src = to_source_row(raw, post.job_url)
+        results.append({
+            "slug": src["slug"], "job_url": post.job_url, "title": post.title, "company": post.company,
+            "location": post.location.display_location() if post.location else "",
+            "is_remote": post.is_remote, "origin": src["origin"],
+            "posted_at": post.date_posted.isoformat() if post.date_posted else None,
+            "salary_min": src["salary_min"], "salary_max": src["salary_max"],
+            "salary_currency": src["salary_currency"], "skills": src["skills"], "suspect": src["suspect"],
+            "in_db": storage.get_job(post.job_url) is not None,
+        })
+    return {"results": results}
+
+
+class FreehireSaveRequest(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=300)
+
+
+@app.post("/freehire/save")
+def freehire_save(req: FreehireSaveRequest) -> dict[str, Any]:
+    """Store one freehire posting picked from an on-the-fly search."""
+    raw = _freehire_call(lambda: FreehireClient().job(req.slug))
+    if raw.get("closed_at"):
+        raise HTTPException(status_code=409, detail="Offerta chiusa alla fonte.")
+    post = to_post(raw)
+    if post is None:
+        raise HTTPException(status_code=502, detail="Offerta freehire senza titolo o link.")
+    site = "linkedin" if raw.get("source") == "linkedin" else "freehire"
+    created = storage.get_job(post.job_url) is None
+    df = pd.DataFrame([post.model_copy(update={"site": site}).model_dump()])
+    storage.upsert_jobs(_with_raw(df, _FULL_COLUMNS))
+    storage.upsert_job_sources([to_source_row(raw, post.job_url)])
+    _kick_analysis(trigger="freehire_save")
+    return {"job_url": post.job_url, "created": created}
 
 
 @app.post("/jobs/restore")

@@ -16,6 +16,8 @@ import type {
   SearchRequest,
   StatusResponse,
   Verdict,
+  FreehireCompany,
+  FreehireResult,
 } from "./types";
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -64,6 +66,15 @@ export const api = {
   createManualApplication: (body: ManualApplication) => req<{ ok: boolean; job_url: string }>("/applications/manual", { method: "POST", body: JSON.stringify(body) }),
   applicationHistory: (url: string) => req<{ events: ApplicationEvent[] }>(`/applications/history?url=${encodeURIComponent(url)}`),
   addApplicationNote: (body: { job_url: string; text: string; occurred_on: string }) => req<{ ok: boolean }>("/applications/notes", { method: "POST", body: JSON.stringify(body) }),
+  analyzeJob: (url: string) => req<{ ok: boolean }>(`/jobs/analyze?url=${encodeURIComponent(url)}`, { method: "POST" }),
+  freehireCompanies: (q: string) => req<{ companies: FreehireCompany[] }>(`/freehire/companies?q=${encodeURIComponent(q)}`),
+  freehireSearch: (p: { q: string; location: string; remote: boolean; days: number }) =>
+    req<{ results: FreehireResult[] }>(`/freehire/search?${new URLSearchParams({
+      q: p.q, location: p.location, remote: String(p.remote), ...(p.days ? { days: String(p.days) } : {}),
+    })}`),
+  freehireSave: (slug: string) => req<{ job_url: string; created: boolean }>("/freehire/save", {
+    method: "POST", body: JSON.stringify({ slug }),
+  }),
   restore: (url: string) => req<{ ok: boolean }>(`/jobs/restore?url=${encodeURIComponent(url)}`, { method: "POST" }),
 
   search: (body: SearchRequest) =>

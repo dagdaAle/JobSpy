@@ -16,6 +16,8 @@ const TRIGGER: Record<LogEntry["trigger"], string> = {
   manual: "Manuale",
   create: "Nuovo canale",
   startup: "Avvio del servizio",
+  source_closed: "Chiuse alla fonte (freehire)",
+  freehire_save: "Salvata da freehire",
 };
 
 const KIND_LABEL: Record<string, string> = {

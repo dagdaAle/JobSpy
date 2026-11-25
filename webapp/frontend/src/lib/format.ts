@@ -108,6 +108,7 @@ const SITE_LABELS: Record<string, string> = {
   workingnomads: "Working Nomads",
   subito: "Subito Lavoro",
   inpa: "inPA · Pubblica Amministrazione",
+  freehire: "freehire",
 };
 
 export function siteLabel(site: string | null | undefined): string {
@@ -123,6 +124,7 @@ export function siteDot(site: string | null | undefined): string {
   if (s.includes("glassdoor")) return "bg-emerald-500";
   if (s.includes("subito")) return "bg-rose-500";
   if (s.includes("inpa")) return "bg-amber-500";
+  if (s.includes("freehire")) return "bg-teal-500";
   return "bg-violet-500";
 }
 

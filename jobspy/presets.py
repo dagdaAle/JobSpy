@@ -21,13 +21,14 @@ from typing import Any
 import pandas as pd
 
 from jobspy import scrape_jobs
+from jobspy.freehire import scrape_freehire
 
 # Boards that operate on the local Indeed/Glassdoor domain (support country_indeed).
 ITALY_LOCAL_SITES = ["indeed", "glassdoor", "linkedin"]
 
 # Italian boards added by this fork: Subito Lavoro (local classifieds) and
 # inPA (public administration competitions). Both take a province as location.
-ITALY_EXTRA_SITES = ["subito", "inpa"]
+ITALY_EXTRA_SITES = ["subito", "inpa", "freehire"]
 
 # Remote-only boards added by this fork.
 REMOTE_ONLY_SITES = ["remotive", "remoteok", "weworkremotely", "workingnomads"]
@@ -114,6 +115,18 @@ def search_site(
     :param is_remote: force a remote search (implied for remote-only boards).
     """
     site = site.strip().lower()
+    company_slug = kwargs.pop("company_slug", "") or ""
+
+    if site == "freehire":
+        # freehire filters by city/country/region, not by radius: distance is ignored.
+        return scrape_freehire(
+            search_term,
+            location=location,
+            is_remote=is_remote,
+            hours_old=hours_old,
+            results_wanted=results_wanted,
+            company_slug=company_slug,
+        )
 
     if site in REMOTE_ONLY_SITES:
         return scrape_jobs(
