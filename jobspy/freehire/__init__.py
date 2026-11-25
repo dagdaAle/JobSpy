@@ -259,19 +259,40 @@ def search_params(
     return params
 
 
+def location_match(location: str | None) -> re.Pattern[str] | None:
+    """freehire's city filter is fuzzy (Verona also brings Verona, WI and Rieti):
+    a pattern the posting location must match, None when no city is given."""
+    parts = [p.strip() for p in " ".join((location or "").split()).lower().split(",")]
+    if not parts[0] or set(location_filter(location)) != {"cities"}:
+        return None
+    city = rf"(?<!\w){re.escape(parts[0])}(?!\w)"
+    if not any(p in _COUNTRY_WORDS for p in parts[1:]):
+        return re.compile(city, re.I)
+    # shortcut: only Italy is known as a country, add more to _COUNTRY_WORDS when needed
+    return re.compile(rf"{city}.*(?<!\w)(italy|italia|it)(?!\w)|^\s*{city}\s*$", re.I)
+
+
 def fetch_postings(
     client: FreehireClient,
     params: dict[str, Any],
     results_wanted: int,
+    location: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Open postings matching ``params``, paging until ``results_wanted``."""
+    """Open postings matching ``params`` (and ``location``, see
+    :func:`location_match`), paging until ``results_wanted``."""
+    match = location_match(location)
     found: list[dict[str, Any]] = []
     offset = 0
     while len(found) < results_wanted:
         limit = min(PAGE_SIZE, results_wanted - len(found))
         page = client.search({**params, "limit": limit, "offset": offset})
         items = page.get("data") or []
-        found.extend(item for item in items if not item.get("closed_at"))
+        found.extend(
+            item
+            for item in items
+            if not item.get("closed_at")
+            and (match is None or match.search(item.get("location") or ""))
+        )
         total = (page.get("meta") or {}).get("total") or 0
         offset += len(items)
         if len(items) < limit or offset >= total:
@@ -323,7 +344,10 @@ class Freehire(Scraper):
         )
         try:
             postings = fetch_postings(
-                client, params, scraper_input.results_wanted or 15
+                client,
+                params,
+                scraper_input.results_wanted or 15,
+                scraper_input.location,
             )
             if not postings:
                 check_city(client, params)
@@ -358,7 +382,7 @@ def scrape_freehire(
         params = search_params(
             search_term, location, is_remote, hours_old, company_slug
         )
-        postings = fetch_postings(client, params, results_wanted)
+        postings = fetch_postings(client, params, results_wanted, location)
         if company_slug and not postings:
             client.company(company_slug)  # 404 -> FreehireError: the company is gone
         if not postings:

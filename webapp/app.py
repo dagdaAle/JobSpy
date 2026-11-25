@@ -934,7 +934,7 @@ def freehire_search(
         raise HTTPException(status_code=422, detail="Serve q o company_slug.")
     params = search_params(q, location, remote, days * 24 if days else None, company_slug)
     client = FreehireClient()
-    postings = _freehire_call(lambda: fetch_postings(client, params, limit))
+    postings = _freehire_call(lambda: fetch_postings(client, params, limit, location))
     if not postings:
         _freehire_call(lambda: check_city(client, params))
     results = []
