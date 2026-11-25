@@ -157,6 +157,11 @@ class EndpointTests(unittest.TestCase):
         bad = MagicMock(); bad.chat.completions.create.return_value.choices[0].message.content = 'non json'
         with patch.object(analyzer, '_client', return_value=bad):
             self.assertEqual(self.client.get(f'/cvs/{self.cv}/match', params={'job_url': JOB_URL}).status_code, 502)
+        for content in ('', '{}'):  # answer cut off by the reasoning budget, or no requirements: not cached
+            empty = MagicMock(); empty.chat.completions.create.return_value.choices[0].message.content = content
+            with patch.object(analyzer, '_client', return_value=empty):
+                self.assertEqual(self.client.get(f'/cvs/{self.cv}/match', params={'job_url': JOB_URL}).status_code, 502)
+        self.assertIsNone(storage.get_job_keywords(JOB_URL))
 
     def test_proposal_keeps_only_verified_patches(self):
         storage.set_job_keywords(JOB_URL, KEYWORDS)

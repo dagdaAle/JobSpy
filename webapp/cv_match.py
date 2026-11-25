@@ -222,7 +222,12 @@ def _chat(system: str, user: str, max_tokens: int) -> dict[str, Any]:
         model=analyzer._MODEL, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         response_format={"type": "json_object"}, temperature=0.1, max_tokens=max_tokens,
     )
-    data = json.loads(response.choices[0].message.content or "{}")
+    # deepseek-flash reasons before answering and the reasoning counts against max_tokens:
+    # a cut-off answer comes back empty, which must be an error, not "no keywords".
+    content = response.choices[0].message.content or ""
+    if not content.strip():
+        raise ValueError("Il modello non ha completato la risposta: riprova")
+    data = json.loads(content)
     if not isinstance(data, dict):
         raise ValueError("Risposta del modello non valida")
     return data
@@ -239,7 +244,7 @@ def _job_text(job: dict[str, Any]) -> str:
 
 def extract_job_keywords(job: dict[str, Any]) -> dict[str, Any]:
     """One DeepSeek call -> JobKeywords (see specs/004-cv-match/contract.md)."""
-    data = _chat(_EXTRACT_PROMPT, f"=== ANNUNCIO ===\n{_job_text(job)}", 1500)
+    data = _chat(_EXTRACT_PROMPT, f"=== ANNUNCIO ===\n{_job_text(job)}", 8000)
     years = data.get("experience_years")
     try:
         years = min(50, max(0, int(years))) if years is not None else None
@@ -250,6 +255,8 @@ def extract_job_keywords(job: dict[str, Any]) -> dict[str, Any]:
           "preferred_skills": _strings(data.get("preferred_skills")),
           "keywords": _strings(data.get("keywords"))}
     deduped: dict[str, list[str]] = {k: [] for k in kw}
+    if not any(kw.values()):
+        raise ValueError("Il modello non ha trovato requisiti nell'annuncio: riprova")
     for term, kind in _terms(kw):
         deduped[{"required": "required_skills", "preferred": "preferred_skills", "keyword": "keywords"}[kind]].append(term)
     return {"role": str(data.get("role") or job.get("title") or "").strip()[:200],
@@ -291,7 +298,7 @@ def propose_tailoring(job: dict[str, Any], cv_markdown: str, job_keywords: dict[
     user = (f"=== CV ===\n{cv_markdown}\n\n=== ANNUNCIO (non prova delle competenze) ===\n{_job_text(job)}\n\n"
             f"=== PAROLE CHIAVE GIÀ PRESENTI NEL CV ===\n{', '.join(found) or '(nessuna)'}\n\n"
             f"=== PAROLE CHIAVE CONFERMATE DALL'UTENTE (le sole nuove ammesse) ===\n{', '.join(attested) or '(nessuna)'}")
-    data = _chat(_TAILOR_PROMPT, user, 4000)
+    data = _chat(_TAILOR_PROMPT, user, 12000)
     if not isinstance(data.get("patches"), list):
         raise ValueError("Risposta del modello non valida")
     patches, rejected = check_patches(cv_markdown, data["patches"], job_keywords, attested)
