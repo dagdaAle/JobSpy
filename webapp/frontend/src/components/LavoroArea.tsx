@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  AlertTriangle, Archive, Bookmark, ChartColumn, Download, FileUser, Inbox, Loader2, Radio, RefreshCw, ScrollText, Search,
+  AlertTriangle, Archive, Bell, Bookmark, ChartColumn, Download, FileUser, Inbox, Loader2, Radio, RefreshCw, ScrollText, Search,
   SearchX, Send, SlidersHorizontal, Sparkles, Wifi, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { EmptyState, JobGrid } from "./JobGrid";
 import { JobDetailSheet } from "./JobDetailSheet";
 import type { CardMode } from "./JobCard";
 import { LogsPage } from "./LogsPage";
+import { NotificationsPage } from "./NotificationsPage";
 import { CvPage } from "./CvPage";
 import { FreehireSearch } from "./FreehireSearch";
 import { AppShell, type NavGroup } from "./shell/AppShell";
@@ -222,6 +223,7 @@ export function LavoroArea({ onArea }: { onArea: (area: Area) => void }) {
     { label: "Sistema", items: [
       { key: "analytics", label: "Analytics", icon: <ChartColumn /> },
       { key: "logs", label: "Log", icon: <ScrollText />, alert: recentLogErrors },
+      { key: "notifiche", label: "Notifiche", icon: <Bell /> },
     ] },
   ];
 
@@ -294,6 +296,7 @@ export function LavoroArea({ onArea }: { onArea: (area: Area) => void }) {
 
       {view === "analytics" && <AnalyticsPage />}
       {view === "logs" && <LogsPage />}
+      {view === "notifiche" && <NotificationsPage />}
       {view === "cvs" && <CvPage />}
       {view === "freehire" && <FreehireSearch />}
       {view === "applications" && <ApplicationsPage onOpen={setSelected} />}

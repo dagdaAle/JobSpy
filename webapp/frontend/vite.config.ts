@@ -21,6 +21,7 @@ const API_ROUTES = [
   "/logs",
   "/pa/", // trailing slash: a bare "/pa" prefix would also catch e.g. "/packages"
   "/gare/",
+  "/push/",
 ];
 
 // The JobSpy backend is exposed on host :8080 (docker-compose maps 8080->8000).

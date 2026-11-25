@@ -23,7 +23,7 @@ export function AreaLabel({ area }: { area: Area }) {
   return <span className={cn("flex items-center gap-1.5 text-xs font-semibold [&_svg]:size-3.5", a.accent)}>{a.icon}{a.label}</span>;
 }
 
-export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "freehire" | "cvs" | "analytics" | "logs";
+export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "freehire" | "cvs" | "analytics" | "logs" | "notifiche";
 
 /** Black header: logo, area switch, AI status, theme. The views live in the sidebar. */
 export function AppHeader({ area, onArea, status }: { area: Area; onArea: (area: Area) => void; status?: StatusResponse }) {
