@@ -12,6 +12,7 @@ import analyzer
 import cv_render
 import cv_template
 import cv_import
+import cv_match
 import cv_review
 import storage
 from fastapi.testclient import TestClient
@@ -89,7 +90,8 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(res.status_code, 201, res.text)
         self.assertEqual(res.json()['cv']['template'], 'classic')
         storage.upsert_jobs([{'job_url': 'https://example.com/job', 'title': 'Backend Engineer'}])
-        with patch.object(analyzer, 'tailor_cv', return_value={'markdown': SAMPLE, 'changes': []}):
+        with patch.object(cv_match, 'extract_job_keywords', return_value={'role': 'Backend Engineer'}), \
+                patch.object(cv_match, 'propose_tailoring', return_value={'patches': [], 'score_before': 50, 'score_after': 50}):
             res = self.client.post('/cvs/tailor', json={'job_url': 'https://example.com/job', 'base_cv_id': cid})
         self.assertEqual(res.status_code, 201, res.text)
         self.assertEqual(res.json()['cv']['template'], 'classic')

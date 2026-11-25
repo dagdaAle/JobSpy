@@ -9,9 +9,9 @@ def source_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def validate_patches(text: str, patches: list[dict[str, Any]]) -> None:
-    if not 1 <= len(patches) <= 6:
-        raise ValueError("Seleziona da una a sei correzioni")
+def validate_patches(text: str, patches: list[dict[str, Any]], limit: int = 6) -> None:
+    if not 1 <= len(patches) <= limit:
+        raise ValueError(f"Seleziona da una a {limit} correzioni")
     spans: list[tuple[int, int]] = []
     for patch in patches:
         before, after = patch.get("before"), patch.get("after")
@@ -56,8 +56,8 @@ def normalize_review(data: Any, text: str) -> dict[str, Any]:
             "observations": strings("observations"), "questions": strings("questions")}
 
 
-def apply_patches(text: str, patches: list[dict[str, Any]]) -> str:
-    validate_patches(text, patches)
+def apply_patches(text: str, patches: list[dict[str, Any]], limit: int = 6) -> str:
+    validate_patches(text, patches, limit)
     # Apply against original positions: replacement text must never be edited
     # by a later patch that happens to contain the same words.
     edits = sorted(((text.index(p["before"]), p) for p in patches), reverse=True)

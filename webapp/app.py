@@ -52,6 +52,7 @@ from jobspy.presets import (
 
 import analyzer
 import channel_filters
+import cv_match
 import cv_render
 import cv_review
 import gare
@@ -1023,20 +1024,26 @@ class CvUpdateRequest(BaseModel):
     template: Literal["europass", "classic"] | None = None
 
 
-class CvTailorRequest(BaseModel):
+class CvPatch(BaseModel):
+    before: str = Field(..., min_length=1, max_length=500)
+    after: str = Field(..., min_length=1, max_length=750)
+    reason: str = Field("Correzione selezionata", max_length=600)
+
+
+class CvTailorProposalRequest(BaseModel):
     job_url: str = Field(..., min_length=1)
+    attested: list[Keyword] = Field(default_factory=list, max_length=30)
+
+
+class CvTailorRequest(CvTailorProposalRequest):
     base_cv_id: int | None = None  # None -> default CV
+    patches: list[CvPatch] | None = Field(None, max_length=cv_match.MAX_PATCHES)
+    source_hash: str | None = Field(None, min_length=64, max_length=64)
 
 
 class CvReviewRequest(BaseModel):
     confirmed_facts: str = Field("", max_length=3000)
     job_url: str | None = Field(None, max_length=3000)
-
-
-class CvPatch(BaseModel):
-    before: str = Field(..., min_length=1, max_length=500)
-    after: str = Field(..., min_length=1, max_length=750)
-    reason: str = Field("Correzione selezionata", max_length=600)
 
 
 class CvRevisionRequest(BaseModel):
@@ -1190,12 +1197,55 @@ def check_cv_pdf(cv_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Impossibile verificare il PDF esportato") from exc
 
 
-@app.post("/cvs/tailor", status_code=201)
-def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
-    """Generate a CV adapted to one job with the LLM, stored as a 'tailored' CV."""
-    job = storage.get_job(req.job_url)
+def _job_or_404(job_url: str) -> dict[str, Any]:
+    job = storage.get_job(job_url)
     if job is None:
         raise HTTPException(status_code=404, detail="Offerta non trovata")
+    return job
+
+
+def _llm(fn, *args):
+    try:
+        return fn(*args)
+    except analyzer.AnalyzerNotConfigured as exc:
+        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Risposta del modello non valida: riprova") from exc
+
+
+def _job_keywords(job: dict[str, Any], refresh: bool = False) -> dict[str, Any]:
+    """Requirements of a job: extracted once with DeepSeek, then read from job_keywords."""
+    cached = None if refresh else storage.get_job_keywords(job["job_url"])
+    if cached is None:
+        cached = _llm(cv_match.extract_job_keywords, job)
+        storage.set_job_keywords(job["job_url"], cached)
+    return cached
+
+
+def _proposal(job: dict[str, Any], cv: dict[str, Any], attested: list[str]) -> dict[str, Any]:
+    if not cv["markdown"].strip() or len(cv["markdown"]) > 16000:
+        raise HTTPException(status_code=422, detail="L'adattamento richiede un CV non vuoto di massimo 16.000 caratteri")
+    return _llm(cv_match.propose_tailoring, job, cv["markdown"], _job_keywords(job), attested)
+
+
+@app.get("/cvs/{cv_id}/match")
+def cv_match_report(cv_id: int, job_url: str = Query(..., min_length=1), refresh: bool = False) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    job = _job_or_404(job_url)
+    keywords = _job_keywords(job, refresh)
+    return {"cv_id": cv_id, "job_url": job_url, **cv_match.match_report(cv["markdown"], keywords), "job": keywords}
+
+
+@app.post("/cvs/{cv_id}/tailor-proposal")
+def cv_tailor_proposal(cv_id: int, req: CvTailorProposalRequest) -> dict[str, Any]:
+    cv = _cv_or_404(cv_id)
+    return _proposal(_job_or_404(req.job_url), cv, req.attested)
+
+
+@app.post("/cvs/tailor", status_code=201)
+def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
+    """Store a 'tailored' CV: the chosen patches, or (old clients) every verified patch."""
+    job = _job_or_404(req.job_url)
     if req.base_cv_id is not None:
         base = _cv_or_404(req.base_cv_id)
     else:
@@ -1203,16 +1253,28 @@ def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
         if default is None:
             raise HTTPException(status_code=400, detail="Nessun CV caricato")
         base = storage.get_cv(default["id"])
-    try:
-        out = analyzer.tailor_cv(job, base["markdown"])
-    except analyzer.AnalyzerNotConfigured as exc:
-        raise HTTPException(status_code=503, detail="Manca la chiave API DeepSeek") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if req.patches is None:
+        proposal = _proposal(job, base, req.attested)
+        patches, before, after = proposal["patches"], proposal["score_before"], proposal["score_after"]
+    else:
+        if req.source_hash is None:
+            raise HTTPException(status_code=422, detail="Manca source_hash")
+        if req.source_hash != cv_review.source_hash(base["markdown"]):
+            raise HTTPException(status_code=409, detail="Il CV è cambiato: genera di nuovo la proposta")
+        keywords = _job_keywords(job)
+        chosen = [p.model_dump() for p in req.patches]
+        patches, rejected = cv_match.check_patches(base["markdown"], chosen, keywords, req.attested)
+        if rejected or not patches:
+            raise HTTPException(status_code=422, detail="Modifiche non valide: genera di nuovo la proposta")
+        before = cv_match.match_report(base["markdown"], keywords)["overall"]
+        after = cv_match.score_after(base["markdown"], patches, keywords)
+    markdown = cv_review.apply_patches(base["markdown"], patches, cv_match.MAX_PATCHES) if patches else base["markdown"]
+    if len(markdown) > 50000:
+        raise HTTPException(status_code=422, detail="CV troppo lungo")
     name = f"{base['name']} → {job.get('company') or ''} {job.get('title') or ''}".strip()[:200]
-    cv_id = storage.create_cv(name, out["markdown"], kind="tailored", parent_id=base["id"],
-                              job_url=req.job_url, changes=out["changes"], template=base["template"])
-    return {"cv": storage.get_cv(cv_id)}
+    cv_id = storage.create_cv(name, markdown, kind="tailored", parent_id=base["id"], job_url=req.job_url,
+                              changes=[p["reason"] for p in patches], template=base["template"])
+    return {"cv": storage.get_cv(cv_id), "score_before": before, "score_after": after}
 
 
 app.include_router(pa.router)
