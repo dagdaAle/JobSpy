@@ -20,7 +20,7 @@ import type {
   FreehireResult,
 } from "./types";
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
+export async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     // Never serve GETs from the browser HTTP cache — otherwise an immediate
     // refetch after a mutation can return stale data and revert the UI.
