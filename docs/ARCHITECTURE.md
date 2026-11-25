@@ -137,6 +137,25 @@ stessa riga, stesso verdetto.
   Dopo l'ok di Ale invia e segna `inviata`. Le cartelle `stato.md` diventano solo copia locale dei file.
 - **Seguito**: a `inviata` si crea in todo-app un promemoria di richiamo (default 10 giorni) **(scelta di Claude)**.
 
+## Tre aree: Lavoro, Concorsi PA, Gare P.IVA (25/11/2026)
+
+Stessa app, stesso DB e stesso login; codice, tabelle, API e pagine separati
+([spec 002](../specs/002-pa-gare-areas/spec.md)).
+
+| Area | Fonti | Codice | Tabelle | API | Frontend |
+|---|---|---|---|---|---|
+| Lavoro | freehire, LinkedIn, Indeed… | `jobspy/`, `webapp/app.py`, `storage.py` | `jobs`, `channels`, `feedback`… | `/jobs`, `/channels`… | `LavoroArea` |
+| Concorsi PA | inPA, Gazzetta Ufficiale 4ª serie | `webapp/pa/` | `pa_*` | `/pa/*` | `components/pa/` |
+| Gare P.IVA | TED (solo bandi aperti `cn-*`) | `webapp/gare/` | `gare_*` | `/gare/*` | `components/gare/` |
+
+- `webapp/area_common.py` e `components/area/` sono infrastruttura neutra (store per prefisso, router,
+  log, chiamata LLM, componenti di lista e form): non conoscono nessuna area. Le aree non si importano a vicenda.
+- `app.py` aggancia le aree in tre punti: `include_router`, `init_tables()` all'avvio, `_refresh_areas()`
+  nello scheduler dopo i canali Lavoro. Un errore di un'area finisce nel log e non ferma le altre.
+- Valutazione come ADR 005/007: l'LLM estrae i fatti del bando o della gara (`pa-v1`, `gare-v1`), la
+  decisione adatto / da valutare / non adatto è codice contro il profilo dell'area (in `meta`).
+- TED contiene solo gare sopra soglia UE: per una P.IVA sono soprattutto subappalto o raggruppamento.
+
 ## Stack
 
 | Parte | Scelta |
