@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FileDown, FileText, Loader2, Plus, Star, Trash2, Upload, Wand2 } from "lucide-react";
+import { FileDown, FileText, Loader2, Plus, Star, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import type { CvSummary } from "../api/types";
 import { useCv, useCvs } from "../hooks";
 import { CvReviewPanel } from "./CvReviewPanel";
 import { CvPdfPreview } from "./CvPdfPreview";
+import { CvMatchPanel } from "./CvMatchPanel";
 
 // Invalidate everything a CV change can touch: the library, the analyses
 // (default CV drives the scoring) and the AI status in the header.
@@ -205,7 +206,7 @@ export function CvEditor({ id, compact = false, jobUrl, onRevisionCreated }: { i
   );
 }
 
-// Detail sheet: tailored CVs for this job + generation from a base CV.
+// Detail sheet: match of a base CV against this job, verified tailoring, tailored CVs for this job.
 export function JobCvSection({ jobUrl }: { jobUrl: string }) {
   const cvs = useCvs();
   const refresh = useRefreshCvs();
@@ -214,43 +215,31 @@ export function JobCvSection({ jobUrl }: { jobUrl: string }) {
   const mine = list.filter((c) => c.kind === "tailored" && c.job_url === jobUrl);
   const [baseId, setBaseId] = useState<string>("");
   const [open, setOpen] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
   const chosen = baseId || String(base.find((c) => c.is_default)?.id ?? base[0]?.id ?? "");
 
-  const generate = () => {
-    setBusy(true);
-    api.tailorCv(jobUrl, chosen ? Number(chosen) : undefined)
-      .then(({ cv }) => { toast.success("CV adattato generato"); refresh(); setOpen(cv.id); })
-      .catch((e: Error) => toast.error(e.message))
-      .finally(() => setBusy(false));
-  };
-
   return (
-    <section className="space-y-3">
-      <h3 className="text-sm font-medium">CV per questa offerta</h3>
-      {base.length > 0 && <details className="rounded-lg border p-3">
-        <summary className="cursor-pointer text-sm font-medium">Revisiona il CV base con poche correzioni</summary>
-        <div className="mt-3"><CvEditor key={chosen} id={Number(chosen)} compact jobUrl={jobUrl}
-          onRevisionCreated={(id) => setBaseId(String(id))} /></div>
-      </details>}
-      {base.length === 0 ? (
+    <section className="space-y-3" aria-labelledby="job-cv-title">
+      <h3 id="job-cv-title" className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">CV per questa offerta</h3>
+      {cvs.isPending ? null : base.length === 0 ? (
         <p className="text-sm text-muted-foreground">Carica prima un CV dalla pagina CV.</p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {base.length > 1 && (
-            <Select items={base.map((c) => ({ value: String(c.id), label: c.name }))} value={chosen} onValueChange={(v) => v && setBaseId(v)}>
-              <SelectTrigger className="w-56" aria-label="CV di partenza"><SelectValue /></SelectTrigger>
-              <SelectContent>{base.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
-            </Select>
-          )}
-          <Button variant="outline" disabled={busy} onClick={generate}>
-            {busy ? <Loader2 className="animate-spin" /> : <Wand2 />} {busy ? "Generazione…" : "Genera CV adattato"}
-          </Button>
-        </div>
-      )}
+      ) : <>
+        {base.length > 1 && (
+          <Select items={base.map((c) => ({ value: String(c.id), label: c.name }))} value={chosen} onValueChange={(v) => v && setBaseId(v)}>
+            <SelectTrigger className="h-11 w-full sm:h-8 sm:w-64" aria-label="CV di partenza"><SelectValue /></SelectTrigger>
+            <SelectContent>{base.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+        )}
+        <CvMatchPanel key={chosen} cvId={Number(chosen)} jobUrl={jobUrl} onSaved={(id) => { void refresh(); setOpen(id); }} />
+        <details className="rounded-lg border p-3">
+          <summary className="cursor-pointer text-sm font-medium">Revisiona il CV base con poche correzioni</summary>
+          <div className="mt-3"><CvEditor key={chosen} id={Number(chosen)} compact jobUrl={jobUrl}
+            onRevisionCreated={(id) => setBaseId(String(id))} /></div>
+        </details>
+      </>}
+      {mine.length > 0 && <h4 className="pt-1 text-sm font-medium">CV adattati per questa offerta</h4>}
       {mine.map((c) => (
         <div key={c.id} className="rounded-lg border p-3">
-          <button type="button" className="flex w-full items-center gap-2 text-left text-sm" onClick={() => setOpen(open === c.id ? null : c.id)}>
+          <button type="button" aria-expanded={open === c.id} className="flex min-h-11 w-full items-center gap-2 rounded-sm text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-0" onClick={() => setOpen(open === c.id ? null : c.id)}>
             <FileText className="size-4 text-muted-foreground" />
             <span className="flex-1 truncate">{c.name}</span>
             <span className="text-xs text-muted-foreground">{open === c.id ? "Chiudi" : "Apri"}</span>

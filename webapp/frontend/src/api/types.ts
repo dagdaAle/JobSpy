@@ -302,6 +302,46 @@ export interface CvPatch {
   reason: string;
 }
 
+// CV match (specs/004-cv-match/contract.md)
+export interface JobKeywords {
+  role: string;
+  company: string;
+  seniority: string | null;
+  experience_years: number | null;
+  required_skills: string[];
+  preferred_skills: string[];
+  keywords: string[];
+}
+export interface MatchKeyword {
+  term: string;
+  kind: "required" | "preferred" | "keyword";
+  found: boolean;
+}
+export interface MatchReport {
+  cv_id: number;
+  job_url: string;
+  overall: number;
+  components: {
+    keyword_match: number | null;
+    skills_coverage: number | null;
+    title_match: number | null;
+    section_completeness: number | null;
+    date_consistency: number | null;
+  };
+  keywords: MatchKeyword[];
+  job: JobKeywords;
+}
+export interface TailorPatch extends CvPatch {
+  keywords: string[];
+}
+export interface TailorProposal {
+  source_hash: string;
+  patches: TailorPatch[];
+  rejected: number;
+  score_before: number;
+  score_after: number;
+}
+
 export interface CvReview {
   source_hash: string;
   patches: CvPatch[];

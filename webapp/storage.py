@@ -404,6 +404,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS ix_cvs_job ON cvs(job_url)")
     if "template" not in {r["name"] for r in conn.execute("PRAGMA table_info(cvs)")}:
         conn.execute("ALTER TABLE cvs ADD COLUMN template TEXT NOT NULL DEFAULT 'europass'")
+    # CV match: requirements extracted once per job by the LLM (JSON JobKeywords).
+    conn.execute("""CREATE TABLE IF NOT EXISTS job_keywords (
+        job_url TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT NOT NULL
+    )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS application_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, job_url TEXT NOT NULL,
         kind TEXT NOT NULL, content TEXT NOT NULL, occurred_on TEXT NOT NULL,
@@ -1744,6 +1748,19 @@ def list_cvs() -> list[dict[str, Any]]:
         rows = conn.execute(f"SELECT {_CV_LIST_COLUMNS} FROM cvs "
                             "ORDER BY is_default DESC, kind, updated_at DESC").fetchall()
     return [_cv_row(r) for r in rows]
+
+
+def get_job_keywords(job_url: str) -> dict[str, Any] | None:
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT data FROM job_keywords WHERE job_url = ?", (job_url,)).fetchone()
+    return json.loads(row["data"]) if row else None
+
+
+def set_job_keywords(job_url: str, data: dict[str, Any]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("INSERT INTO job_keywords (job_url, data, created_at) VALUES (?, ?, ?) "
+                     "ON CONFLICT(job_url) DO UPDATE SET data = excluded.data, created_at = excluded.created_at",
+                     (job_url, json.dumps(data, ensure_ascii=False), _now()))
 
 
 def get_cv(cv_id: int) -> dict[str, Any] | None:

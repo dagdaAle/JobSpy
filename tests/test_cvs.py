@@ -1,9 +1,10 @@
 """CV library: storage rules, tailoring endpoint (LLM mocked) and PDF export."""
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'webapp'), str(ROOT)]
@@ -51,11 +52,17 @@ class CvTests(unittest.TestCase):
         storage.create_cv('Base', '# Ale\nPython')
         storage.upsert_jobs([dict(job_url='https://e.com/1', title='AI Engineer', company='Acme',
                                   description='LangGraph ' * 20)])
-        fake = {'markdown': '# Ale\nPython, LangGraph', 'changes': ['Messo in evidenza LangGraph']}
-        with patch.object(analyzer, 'tailor_cv', return_value=fake):
-            res = TestClient(webapp.app).post('/cvs/tailor', json={'job_url': 'https://e.com/1'})
+        model = MagicMock()
+        replies = [{'role': 'AI Engineer', 'required_skills': ['LangGraph']},
+                   {'patches': [{'before': 'Python', 'after': 'Python, LangGraph', 'reason': 'Messo in evidenza LangGraph'}]}]
+        model.chat.completions.create.side_effect = [
+            MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(r)))]) for r in replies]
+        with patch.object(analyzer, '_client', return_value=model):
+            res = TestClient(webapp.app).post('/cvs/tailor', json={'job_url': 'https://e.com/1', 'attested': ['LangGraph']})
         self.assertEqual(res.status_code, 201, res.text)
         cv = res.json()['cv']
+        self.assertEqual((cv['markdown'], cv['changes']), ('# Ale\nPython, LangGraph', ['Messo in evidenza LangGraph']))
+        self.assertGreater(res.json()['score_after'], res.json()['score_before'])
         self.assertEqual((cv['kind'], cv['parent_id'], cv['job_url']), ('tailored', 1, 'https://e.com/1'))
         pdf = TestClient(webapp.app).get(f"/cvs/{cv['id']}/pdf")
         self.assertTrue(pdf.content.startswith(b'%PDF'))

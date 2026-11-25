@@ -1,0 +1,8 @@
+JobSpy webapp
+Copyright the JobSpy contributors.
+
+This product includes software adapted from Resume-Matcher
+(https://github.com/srbhr/Resume-Matcher), licensed under the Apache License,
+Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+Adapted parts: webapp/cv_match.py (keyword matching, ATS-style score,
+fact check of rewrites, keyword extraction and truthfulness prompts).

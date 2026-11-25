@@ -10,6 +10,8 @@ import type {
   CvReview,
   CvPatch,
   CvPdfCheck,
+  MatchReport,
+  TailorProposal,
   JobsResponse,
   JobDetailResponse,
   LogsResponse,
@@ -36,7 +38,8 @@ export async function req<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    // status lets callers tell e.g. 409 (CV changed) from other failures
+    throw Object.assign(new Error(detail), { status: res.status });
   }
   return res.json() as Promise<T>;
 }
@@ -134,8 +137,12 @@ export const api = {
   updateCv: (id: number, body: { name?: string; markdown?: string; template?: "europass" | "classic" }) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   setDefaultCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}/default`, { method: "POST" }),
   deleteCv: (id: number) => req<{ ok: boolean }>(`/cvs/${id}`, { method: "DELETE" }),
-  tailorCv: (jobUrl: string, baseCvId?: number) => req<{ cv: Cv }>("/cvs/tailor", {
-    method: "POST", body: JSON.stringify({ job_url: jobUrl, base_cv_id: baseCvId ?? null }),
+  tailorCv: (body: { job_url: string; base_cv_id?: number | null; attested?: string[]; patches?: CvPatch[]; source_hash?: string }) =>
+    req<{ cv: Cv; score_before: number; score_after: number }>("/cvs/tailor", { method: "POST", body: JSON.stringify(body) }),
+  cvMatch: (cvId: number, jobUrl: string, refresh?: boolean) =>
+    req<MatchReport>(`/cvs/${cvId}/match?job_url=${encodeURIComponent(jobUrl)}${refresh ? "&refresh=1" : ""}`),
+  tailorProposal: (cvId: number, jobUrl: string, attested: string[]) => req<TailorProposal>(`/cvs/${cvId}/tailor-proposal`, {
+    method: "POST", body: JSON.stringify({ job_url: jobUrl, attested }),
   }),
   cvPdfUrl: (id: number) => `/cvs/${id}/pdf`,
   cvPreviewInfo: (id: number) => req<{ pages: number }>(`/cvs/${id}/preview`),
