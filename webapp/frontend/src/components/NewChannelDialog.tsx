@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AreaLabel } from "./AppHeader";
 import {
   Dialog,
   DialogContent,
@@ -137,9 +138,10 @@ export function NewChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !mutation.isPending && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl max-sm:h-dvh max-sm:max-w-full max-sm:rounded-none max-sm:overflow-y-auto">
         <form onSubmit={submit} className="grid gap-5">
           <DialogHeader>
+            <AreaLabel area="lavoro" />
             <DialogTitle>{channel ? "Modifica canale" : "Nuovo canale"}</DialogTitle>
             <DialogDescription>
               {channel

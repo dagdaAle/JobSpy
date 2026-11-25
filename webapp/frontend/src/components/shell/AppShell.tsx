@@ -39,7 +39,7 @@ export function AppShell<K extends string>({ area, onArea, status, nav, active, 
         {filterBar}
       </header>
 
-      <div className="flex">
+      <div className="flex min-h-[calc(100dvh-4rem)]">
         <aside className="hidden w-66 shrink-0 border-r bg-card md:block">
           <div className="sticky top-0 max-h-screen space-y-6 overflow-y-auto py-6 pr-4 pl-6">
             {nav.map((g, i) => (

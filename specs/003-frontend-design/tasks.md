@@ -7,6 +7,6 @@
 - [x] T005 `LavoroArea` su `AppShell`: sezioni per decisione, filtri, avvisi (LLM, estrazione, errori canali)
 - [x] T006 `JobDetailSheet`: testa, numeri, componenti ricavate
 - [x] T007 `AreaPage` + `ItemCard` su shell e card comuni; sezioni per esito; filtri scadenza/importo
-- [ ] T008 Restyle `ChannelBar`, dialog canale, form profilo, stati vuoti — *parziale: stati vuoti fatti; barra canali, dialog e form prendono solo i nuovi token, non hanno ancora la forma del design (chip a pillola, nota d’area)*
+- [x] T008 Restyle `ChannelBar` (pillole), dialog canale (etichetta d’area, nota colorata, schermo intero su telefono), elenco canali e form profilo, input e select a 40 px
 - [x] T009 Mobile: barra in basso, filtri scorrevoli, dettaglio a schermo intero
 - [x] T010 Build pulita, unittest verdi, controllo nel browser chiaro/scuro/mobile

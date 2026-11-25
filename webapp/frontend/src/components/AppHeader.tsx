@@ -17,6 +17,12 @@ export const AREAS: { area: Area; label: string; short: string; icon: ReactNode;
 
 export const areaInfo = (area: Area) => AREAS.find((a) => a.area === area)!;
 
+/** Small "area" label above a dialog title: icon and name in the area accent. */
+export function AreaLabel({ area }: { area: Area }) {
+  const a = areaInfo(area);
+  return <span className={cn("flex items-center gap-1.5 text-xs font-semibold [&_svg]:size-3.5", a.accent)}>{a.icon}{a.label}</span>;
+}
+
 export type View = "feed" | "new" | "saved" | "dismissed" | "archived" | "applications" | "freehire" | "cvs" | "analytics" | "logs";
 
 /** Black header: logo, area switch, AI status, theme. The views live in the sidebar. */

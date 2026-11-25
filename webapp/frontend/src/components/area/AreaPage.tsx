@@ -188,7 +188,7 @@ export function AreaPage({ config, onArea }: { config: AreaConfig; onArea: (area
     dismissed: "Puoi rimetterli nel feed.",
     archived: "Scaduti o usciti dal feed.",
     channels: "Ricerche salvate: girano ogni mattina, un errore non ferma gli altri canali.",
-    profile: config.profileHint ?? "",
+    profile: `Cosa hai e cosa cerchi: decide l’esito di ogni ${area === "pa" ? "bando" : "gara"}.`,
   }[tab];
 
   return (
@@ -232,7 +232,7 @@ export function AreaPage({ config, onArea }: { config: AreaConfig; onArea: (area
       )}
 
       {tab === "profile" && (
-        <ProfileForm area={area} fields={config.profileFields} defaults={config.profileDefaults} meta={meta.data} />
+        <ProfileForm area={area} fields={config.profileFields} defaults={config.profileDefaults} meta={meta.data} hint={config.profileHint} />
       )}
 
       <ItemDetailSheet

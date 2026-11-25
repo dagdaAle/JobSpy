@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -50,21 +50,9 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
     });
   };
 
-  const selectedChannel = channels.find((ch) => ch.id === activeChannelId);
-
   return (
-    <section className="rounded-xl border bg-card p-3 sm:p-4">
-      <div className="flex items-center justify-between gap-3">
-        <details className="group min-w-0 flex-1">
-          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-            <span className="truncate">Canali di ricerca</span>
-            <span className="shrink-0 text-xs font-normal text-muted-foreground">({channels.length})</span>
-            <span className="hidden truncate text-xs font-normal text-muted-foreground sm:inline">
-              · {selectedChannel?.name || (selectedChannel ? `${siteLabel(selectedChannel.site)} · ${selectedChannel.search_term}` : "Tutti i canali")}
-            </span>
-          </summary>
-          <div className="mt-3 flex max-h-64 flex-wrap content-start gap-2 overflow-y-auto p-1">
+    <section aria-label="Canali di ricerca">
+          <div className="flex flex-wrap items-center gap-2">
             <Pill active={activeChannelId === null} onClick={() => onSelect(null)} count={allCount}>
               Tutti i canali
             </Pill>
@@ -74,6 +62,7 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
               return (
                 <Pill
                   key={ch.id}
+                  failed={failed}
                   active={ch.id === activeChannelId}
                   onClick={() => onSelect(ch.id)}
                   count={ch.total_count ?? 0}
@@ -102,7 +91,7 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
                             variant="ghost"
                             size="icon-xs"
                             aria-label={`Azioni canale ${ch.name}`}
-                            className="-mr-1 text-muted-foreground"
+                            className={cn("-mr-0.5", ch.id === activeChannelId ? "text-primary-foreground hover:bg-transparent hover:text-primary-foreground" : "text-muted-foreground")}
                           />
                         }
                       >
@@ -135,18 +124,14 @@ export function ChannelBar({ channels, sites, allCount, activeChannelId, onSelec
                 </Pill>
               );
             })}
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-dashed border-input px-3.5 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <Plus className="size-3.5" /> Nuovo canale
+            </button>
           </div>
-        </details>
-
-        <Button
-          variant="outline"
-          onClick={() => setCreating(true)}
-          className="shrink-0"
-          aria-label="Nuovo canale"
-        >
-          <Plus /> <span className="hidden sm:inline">Nuovo canale</span>
-        </Button>
-      </div>
 
       <NewChannelDialog open={creating} onOpenChange={setCreating} sites={sites} />
       <NewChannelDialog
@@ -191,6 +176,7 @@ function Pill({
   onClick,
   count,
   fresh = 0,
+  failed,
   lead,
   menu,
   children,
@@ -199,6 +185,7 @@ function Pill({
   onClick: () => void;
   count: number;
   fresh?: number;
+  failed?: boolean;
   lead?: React.ReactNode;
   menu?: React.ReactNode;
   children: React.ReactNode;
@@ -206,10 +193,8 @@ function Pill({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center rounded-full border pr-1.5 text-sm transition-colors",
-        active
-          ? "border-primary/40 bg-primary/10 text-foreground"
-          : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+        "flex h-9 shrink-0 items-center rounded-full border pr-1.5 text-[13px] font-medium transition-colors",
+        active ? "border-primary bg-primary text-primary-foreground" : failed ? "border-destructive bg-card text-foreground" : "bg-card text-foreground hover:bg-muted",
         !menu && "pr-0",
       )}
     >
@@ -217,13 +202,13 @@ function Pill({
         type="button"
         onClick={onClick}
         aria-pressed={active}
-        className="flex h-8 items-center gap-2 rounded-full pl-3 pr-1.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex h-full items-center gap-2 rounded-full pr-1.5 pl-3.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {lead}
         <span className="whitespace-nowrap">{children}</span>
-        <span className="tabular-nums text-xs text-muted-foreground">{count}</span>
+        <span className={cn("rounded-full px-1.5 font-mono text-[11px] leading-4 font-semibold", active ? "bg-area-lavoro text-primary-foreground" : "bg-muted text-muted-foreground")}>{count}</span>
         {fresh > 0 && (
-          <span className="rounded-full bg-primary px-1.5 text-[11px] font-medium leading-4 text-primary-foreground">
+          <span className="rounded-full bg-candidati px-1.5 font-mono text-[11px] leading-4 font-semibold text-candidati-foreground">
             +{fresh}
           </span>
         )}

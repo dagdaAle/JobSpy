@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, CircleHelp, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AreaKey, AreaMeta } from "../../api/areas";
@@ -49,10 +50,11 @@ function Editor({
 }) {
   const save = useSaveAreaProfile(area);
   const [form, setForm] = useState(initial);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
 
   return (
     <form
-      className="grid max-w-2xl gap-5 rounded-xl border bg-card p-5"
+      className="grid max-w-3xl gap-5 rounded-xl border bg-card p-6 sm:p-8"
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate(form, {
@@ -61,15 +63,21 @@ function Editor({
         });
       }}
     >
-      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
+      {hint && (
+        <p className={cn("flex items-start gap-2.5 rounded-md p-3 text-[13px] leading-relaxed", area === "pa" ? "bg-area-pa-soft" : "bg-area-gare-soft")}>
+          <CircleHelp className={cn("mt-0.5 size-4 shrink-0", area === "pa" ? "text-area-pa" : "text-area-gare")} />
+          {hint}
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         {fields.map((f) => (
           <FormField key={f.name} field={f} meta={meta} value={form[f.name]}
             onChange={(v) => setForm((s) => ({ ...s, [f.name]: v }))} />
         ))}
       </div>
-      <div>
-        <Button type="submit" disabled={save.isPending}>
+      <div className="flex items-center justify-end gap-3">
+        {dirty && <span className="text-[13px] text-muted-foreground">Modifiche non salvate</span>}
+        <Button type="submit" className="h-10 px-5" disabled={save.isPending || !dirty}>
           {save.isPending && <Loader2 className="animate-spin" />}
           Salva profilo
         </Button>
