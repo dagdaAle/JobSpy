@@ -1,0 +1,3 @@
+// Debug: optional prefill of URL and key (gitignored Secrets.xcconfig) and the team (Signing.xcconfig).
+#include? "Signing.xcconfig"
+#include? "Secrets.xcconfig"

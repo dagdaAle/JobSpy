@@ -1,0 +1,200 @@
+{
+    "applications": {
+        "https://example.com/jobs/7": {
+            "job_url": "https://example.com/jobs/7",
+            "status": "interview",
+            "applied_on": "2026-11-05",
+            "notes": "",
+            "next_step": "Colloquio tecnico",
+            "follow_up_on": "2026-12-02",
+            "updated_at": "2026-11-26 09:24:29",
+            "cv_label": "",
+            "contact": "",
+            "cv_id": null
+        }
+    },
+    "count": 4,
+    "jobs": [
+        {
+            "job_url": "https://example.com/jobs/1",
+            "site": "linkedin",
+            "title": "Sviluppatore Python backend",
+            "company": "Azienda Esempio Srl",
+            "location": "Verona, Veneto",
+            "is_remote": false,
+            "job_type": "fulltime",
+            "date_posted": "2026-11-24",
+            "company_logo": null,
+            "salary_min": "38000",
+            "salary_max": "45000",
+            "salary_currency": "EUR",
+            "salary_interval": "yearly",
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "first_seen": "2026-11-26 09:24:29",
+            "last_seen": "2026-11-26 09:24:29",
+            "is_new": false
+        },
+        {
+            "job_url": "https://example.com/jobs/3",
+            "site": "linkedin",
+            "title": "Full stack developer React",
+            "company": "Prova Software Srl",
+            "location": "Villafranca di Verona, Veneto",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-24",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "first_seen": "2026-11-26 09:24:29",
+            "last_seen": "2026-11-26 09:24:29",
+            "is_new": false
+        },
+        {
+            "job_url": "https://example.com/jobs/7",
+            "site": "linkedin",
+            "title": "Analista funzionale",
+            "company": "Consulenze Demo Srl",
+            "location": "Verona, Veneto",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-22",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "first_seen": "2026-11-26 09:24:29",
+            "last_seen": "2026-11-26 09:24:29",
+            "is_new": false
+        },
+        {
+            "job_url": "https://example.com/jobs/9",
+            "site": "linkedin",
+            "title": "Sviluppatore PHP",
+            "company": "Web Prova Snc",
+            "location": "Vicenza, Veneto",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-10",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "first_seen": "2026-11-26 09:24:29",
+            "last_seen": "2026-11-26 09:24:29",
+            "is_new": true
+        }
+    ],
+    "feedback": {
+        "https://example.com/jobs/9": "dislike"
+    },
+    "analysis": {
+        "https://example.com/jobs/1": {
+            "assessment": {
+                "work_mode": "hybrid",
+                "location_fit": "compatible",
+                "location_reason": "Verona, in zona.",
+                "confidence": "medium",
+                "missing_requirements": [
+                    "Docker"
+                ],
+                "cv_match": [
+                    "Python",
+                    "FastAPI",
+                    "PostgreSQL",
+                    "Git",
+                    "Linux"
+                ],
+                "blockers": [],
+                "decision": "apply",
+                "seniority": "mid",
+                "stack": [
+                    "Python",
+                    "FastAPI",
+                    "PostgreSQL"
+                ]
+            },
+            "tags": [
+                "Backend",
+                "Python",
+                "Ibrido"
+            ],
+            "summary": "Stack Python e FastAPI come nel CV, sede a Verona e RAL indicata.",
+            "relevance_score": 82,
+            "reasons": [
+                "Stack Python e FastAPI come nel CV, sede a Verona e RAL indicata."
+            ]
+        },
+        "https://example.com/jobs/3": {
+            "assessment": {
+                "work_mode": "onsite",
+                "location_fit": "unknown",
+                "location_reason": "Sede da verificare: l'annuncio cita pi\u00f9 uffici.",
+                "confidence": "medium",
+                "missing_requirements": [
+                    "React",
+                    "TypeScript"
+                ],
+                "cv_match": [
+                    "Git"
+                ],
+                "blockers": [],
+                "decision": "maybe"
+            },
+            "tags": [
+                "Full stack",
+                "React"
+            ],
+            "summary": "Full stack con React: met\u00e0 dello stack \u00e8 nuovo.",
+            "relevance_score": 55,
+            "reasons": [
+                "Full stack con React: met\u00e0 dello stack \u00e8 nuovo."
+            ]
+        },
+        "https://example.com/jobs/7": {
+            "assessment": {
+                "work_mode": "unknown",
+                "location_fit": "unknown",
+                "location_reason": "",
+                "confidence": "low",
+                "missing_requirements": []
+            },
+            "tags": [],
+            "summary": "",
+            "relevance_score": null,
+            "reasons": []
+        }
+    },
+    "analyzer_configured": false
+}

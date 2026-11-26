@@ -1,0 +1,4 @@
+// Release: never embeds URL or key; they are entered in the app's Settings (key in the Keychain).
+#include? "Signing.xcconfig"
+JOBSPY_API_URL =
+JOBSPY_API_KEY =

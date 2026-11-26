@@ -1,0 +1,80 @@
+{
+    "cv_id": 1,
+    "job_url": "https://example.com/jobs/1",
+    "overall": 47,
+    "components": {
+        "keyword_match": 44,
+        "skills_coverage": 50,
+        "title_match": 17,
+        "section_completeness": 80,
+        "date_consistency": null
+    },
+    "keywords": [
+        {
+            "term": "Python",
+            "kind": "required",
+            "found": true
+        },
+        {
+            "term": "FastAPI",
+            "kind": "required",
+            "found": true
+        },
+        {
+            "term": "PostgreSQL",
+            "kind": "required",
+            "found": true
+        },
+        {
+            "term": "Docker",
+            "kind": "required",
+            "found": false
+        },
+        {
+            "term": "Kubernetes",
+            "kind": "preferred",
+            "found": false
+        },
+        {
+            "term": "Redis",
+            "kind": "preferred",
+            "found": false
+        },
+        {
+            "term": "API REST",
+            "kind": "keyword",
+            "found": true
+        },
+        {
+            "term": "CI/CD",
+            "kind": "keyword",
+            "found": false
+        },
+        {
+            "term": "microservizi",
+            "kind": "keyword",
+            "found": false
+        }
+    ],
+    "job": {
+        "role": "Sviluppatore Python backend",
+        "company": "Azienda Esempio Srl",
+        "seniority": "mid",
+        "experience_years": 2,
+        "required_skills": [
+            "Python",
+            "FastAPI",
+            "PostgreSQL",
+            "Docker"
+        ],
+        "preferred_skills": [
+            "Kubernetes",
+            "Redis"
+        ],
+        "keywords": [
+            "API REST",
+            "CI/CD",
+            "microservizi"
+        ]
+    }
+}
