@@ -10,6 +10,9 @@ enum UIArgs {
     static var saved: Int { d.integer(forKey: "uiSaved") }
     static var screen: String? { d.string(forKey: "uiScreen") }
     static var search: String? { d.string(forKey: "uiSearch") }
+    static var cv: Int { d.integer(forKey: "uiCv") }
+    /// Keeps the feed in its loading state (skeleton) for the I11b screenshot.
+    static var loading: Bool { d.bool(forKey: "uiLoading") }
 }
 
 @main
@@ -17,6 +20,7 @@ struct JobSpyApp: App {
     @State private var store = Store()
     @State private var tab = UIArgs.tab
     @Environment(\.scenePhase) private var phase
+    @AppStorage("theme") private var theme = AppTheme.system
 
     var body: some Scene {
         WindowGroup {
@@ -31,6 +35,7 @@ struct JobSpyApp: App {
             }
             .tint(Theme.primary)
             .environment(store)
+            .preferredColorScheme(theme.scheme)
             .overlay(alignment: .bottom) {
                 if let t = store.toast {
                     ToastView(toast: t) { if store.toast?.id == t.id { store.toast = nil } }
@@ -43,4 +48,9 @@ struct JobSpyApp: App {
             .onChange(of: phase) { _, p in if p == .active { Task { await store.reloadIfStale() } } }
         }
     }
+}
+
+enum AppTheme: String, CaseIterable {
+    case system = "Sistema", light = "Chiaro", dark = "Scuro"
+    var scheme: ColorScheme? { self == .light ? .light : self == .dark ? .dark : nil }
 }

@@ -10,4 +10,6 @@
 - [x] T008 CV match: analisi, sheet parole chiave, sheet modifiche, salvataggio
 - [x] T009 Preferiti / Scartati / Archivio, Candidature, CV, Canali, Cerca, Impostazioni (Keychain)
 - [x] T010 Test Store con `URLProtocol`; build e test sul simulatore; screenshot chiaro/scuro
+- [x] T012 Allineamento alle tavole I7–I12: canali (crea, modifica, elimina, aggiorna tutti), CV (elenco, anteprima,
+  PDF, Revisione AI), Impostazioni dall'avatar, stati (nessun canale, avvisi, scheletri), Preferiti con conteggi
 - [ ] T011 Ale: `MOBILE_API_KEY` su Coolify, esclusione `^/mobile/` in Authentik, deploy, installazione sul telefono

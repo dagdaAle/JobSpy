@@ -45,4 +45,20 @@ MatchReport, TailorProposal: come in specs/004-cv-match/contract.md
 | POST | `/cvs/{id}/tailor-proposal` `{job_url, attested[]}` | modifiche proposte (LLM) | 5 min |
 | POST | `/cvs/tailor` `{job_url, base_cv_id, attested[], patches[], source_hash}` | salva il CV adattato | 5 min |
 
+Aggiunte con l'allineamento I7–I12:
+
+| Metodo | Rotta | Uso nell'app | Timeout |
+|---|---|---|---|
+| POST | `/channels` `ChannelRequest` | «Crea» (uno per fonte scelta; fa subito il primo scraping) | 5 min |
+| PUT | `/channels/{id}` | «Salva» un canale modificato | 30 s |
+| DELETE | `/channels/{id}` | swipe «Elimina» | 30 s |
+| GET | `/logs?limit=100` | motivo dell'ultimo errore di un canale | 30 s |
+| GET | `/freehire/companies?q=` | «Segui un'azienda» su freehire | 30 s |
+| POST | `/cvs/upload?name=` (corpo PDF) | «Carica PDF» | 5 min |
+| GET | `/cvs/{id}/preview` | numero di pagine | 30 s |
+| POST / DELETE | `/cvs/{id}/default`, `/cvs/{id}` | predefinito, elimina | 30 s |
+| PATCH | `/cvs/{id}` `{markdown}` | «Modifica» | 30 s |
+| POST | `/cvs/{id}/review`, `/cvs/{id}/revision` | «Revisione AI» e salvataggio della revisione | 5 min / 30 s |
+| GET | `/openapi.json` | versione del server nelle Impostazioni | 30 s |
+
 `job_url` va sempre in query string con percent-encoding completo (contiene `:`, `/`, `?`, `&`).

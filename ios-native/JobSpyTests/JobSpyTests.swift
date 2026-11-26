@@ -154,6 +154,28 @@ nonisolated final class JobSpyTests: XCTestCase {
         XCTAssertFalse(a.isDue(today: "2026-11-26"))
     }
 
+    // MARK: channels and CV (I7–I9)
+
+    func testChannelBodyRoundTrip() throws {
+        let channels: ChannelsResponse = try fixture("channels")
+        XCTAssertFalse(channels.sites?.isEmpty ?? true)
+        var b = ChannelBody(channels.channels[0])
+        XCTAssertEqual(b.search_term, "python")
+        XCTAssertEqual(b.distance_km, 25)
+        b.hours_old = nil
+        let json = String(decoding: try APIClient.encoder.encode(b), as: UTF8.self)
+        XCTAssertTrue(json.contains(#""hours_old":null"#)) // null = no age limit, must be sent
+        XCTAssertEqual(ChannelFormView.list(" a, b ,,c "), ["a", "b", "c"])
+    }
+
+    func testChannelSummaryAndWords() {
+        let c = Channel(id: 1, name: "X", site: "linkedin", search_term: "python", location: "Verona", distance_km: 25, hours_old: 168)
+        XCTAssertEqual(ChannelCard.summary(c), "LinkedIn · python · Verona 25 km · 7 giorni")
+        let r = Channel(id: 2, site: "remotive", search_term: "ml", is_remote: Flag(true))
+        XCTAssertEqual(ChannelCard.summary(r), "Remotive · ml · remoto · tutte le date")
+        XCTAssertEqual(CvDetailView.words("# Mario Rossi\nSviluppatore  software"), 5)
+    }
+
     // MARK: client
 
     func testQueryEncodingAndErrors() throws {
@@ -273,6 +295,31 @@ nonisolated final class StoreTests: XCTestCase {
         let bodies = MockProtocol.requests.filter { $0.url?.path == "/mobile/feedback" }.compactMap { $0.httpBody }
         XCTAssertEqual(bodies.count, 2)
         XCTAssertTrue(bodies.contains { String(decoding: $0, as: UTF8.self).contains(#""verdict":null"#) })
+    }
+
+    @MainActor func testCreateOneChannelPerSourceAndErrors() async throws {
+        let store = makeStore()
+        await store.loadAll()
+        MockProtocol.requests = []
+        var b = ChannelBody()
+        b.search_term = "python"; b.name = "Python"
+        let ok = await store.createChannels(b, sites: ["linkedin", "freehire"])
+        XCTAssertTrue(ok)
+        let posts = MockProtocol.requests.filter { $0.httpMethod == "POST" && $0.url?.path == "/mobile/channels" }
+        XCTAssertEqual(posts.count, 2)
+        let bodies = posts.compactMap(\.httpBody).map { String(decoding: $0, as: UTF8.self) }
+        XCTAssertTrue(bodies[0].contains(#""site":"linkedin""#) && bodies[0].contains("Python · LinkedIn"))
+        XCTAssertTrue(bodies[1].contains(#""site":"freehire""#))
+
+        MockProtocol.overrides["GET /logs"] = (200, Data(#"{"logs":[{"id":9,"kind":"refresh","channel_id":3,"status":"error","error":"HTTP 429 dalla fonte"},{"id":8,"kind":"refresh","channel_id":3,"status":"error","error":"vecchio"}]}"#.utf8))
+        await store.loadChannelErrors()
+        XCTAssertEqual(store.channelErrors[3], "HTTP 429 dalla fonte")
+        XCTAssertEqual(store.failedChannels.map(\.id), [3])
+
+        MockProtocol.overrides["POST /channels"] = (502, Data(#"{"detail":"Canale creato ma scraping fallito"}"#.utf8))
+        let failed = await store.createChannels(b, sites: ["linkedin"])
+        XCTAssertFalse(failed)
+        XCTAssertEqual(store.toast?.isError, true)
     }
 
     @MainActor func testCvMatchFlowAndConflict() async {

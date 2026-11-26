@@ -232,12 +232,76 @@ nonisolated struct Channel: Codable, Sendable, Hashable, Identifiable {
     var new_count: Int?
     var last_refresh_at: String?
     var last_refresh_status: String?
+    var distance_km: Int?
+    var results_wanted: Int?
+    var hours_old: Int?
+    var include_keywords: [String]?
+    var exclude_keywords: [String]?
+    var exclude_companies: [String]?
+    var work_mode: String?
+    var company_slug: String?
 
     var title: String { name?.isEmpty == false ? name! : "\(site ?? "")\(search_term.map { ": \($0)" } ?? "")" }
     var failed: Bool { last_refresh_status == "error" }
 }
 
-nonisolated struct ChannelsResponse: Decodable, Sendable { let channels: [Channel] }
+nonisolated struct ChannelsResponse: Decodable, Sendable { let channels: [Channel]; var sites: [String]? }
+
+/// POST /channels (all fields) and PUT /channels/{id} (same body: every field is sent).
+nonisolated struct ChannelBody: Codable, Sendable, Equatable {
+    var site = "linkedin"
+    var search_term = ""
+    var name = ""
+    var location = "Verona"
+    var distance_km = 25
+    var results_wanted = 25
+    var hours_old: Int? = 7 * 24
+    var is_remote = false
+    var include_keywords: [String] = []
+    var exclude_keywords: [String] = []
+    var exclude_companies: [String] = []
+    var work_mode = "any"
+    var company_slug = ""
+
+    init() {}
+
+    init(_ c: Channel) {
+        site = c.site ?? site; search_term = c.search_term ?? ""; name = c.name ?? ""; location = c.location ?? ""
+        distance_km = c.distance_km ?? 25; results_wanted = c.results_wanted ?? 25; hours_old = c.hours_old
+        is_remote = c.is_remote?.value ?? false; include_keywords = c.include_keywords ?? []
+        exclude_keywords = c.exclude_keywords ?? []; exclude_companies = c.exclude_companies ?? []
+        work_mode = c.work_mode ?? "any"; company_slug = c.company_slug ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(site, forKey: .site); try c.encode(search_term, forKey: .search_term); try c.encode(name, forKey: .name)
+        try c.encode(location, forKey: .location); try c.encode(distance_km, forKey: .distance_km)
+        try c.encode(results_wanted, forKey: .results_wanted)
+        try c.encode(hours_old, forKey: .hours_old) // explicit null = no age limit
+        try c.encode(is_remote, forKey: .is_remote); try c.encode(include_keywords, forKey: .include_keywords)
+        try c.encode(exclude_keywords, forKey: .exclude_keywords); try c.encode(exclude_companies, forKey: .exclude_companies)
+        try c.encode(work_mode, forKey: .work_mode); try c.encode(company_slug, forKey: .company_slug)
+    }
+}
+
+nonisolated struct ChannelCreated: Decodable, Sendable { let channel: Channel?; let new_count: Int? }
+
+nonisolated struct FreehireCompany: Decodable, Sendable, Hashable, Identifiable {
+    let slug: String
+    let name: String?
+    let job_count: Int?
+    var id: String { slug }
+}
+
+nonisolated struct LogEntry: Decodable, Sendable, Hashable {
+    let id: Int
+    let kind: String?
+    let channel_id: Int?
+    let status: String?
+    let error: String?
+    let finished_at: String?
+}
 
 nonisolated struct Status: Decodable, Sendable, Equatable {
     var analyzer_configured: Bool?
@@ -268,12 +332,24 @@ nonisolated struct Cv: Decodable, Sendable, Hashable {
     let id: Int
     var name: String
     var kind: String?
+    var parent_id: Int?
+    var job_url: String?
+    var is_default: Flag?
     var markdown: String?
     var changes: [String]?
     var updated_at: String?
 }
 
 nonisolated struct CvResponse: Decodable, Sendable { let cv: Cv }
+
+nonisolated struct CvReview: Decodable, Sendable, Hashable {
+    let source_hash: String
+    var patches: [TailorPatch]
+    var observations: [String]?
+    var questions: [String]?
+}
+
+nonisolated struct RevisionBody: Encodable, Sendable { let source_hash: String; let patches: [TailorBody.Patch] }
 
 // CV match (specs/004-cv-match/contract.md)
 

@@ -1,50 +1,140 @@
 import SwiftUI
 
+/// Pushes from the Feed stack.
+enum FeedRoute: Hashable { case channels }
+
 /// I1 · Feed Lavoro: large title, channel chips, cards grouped by decision, swipe left = Scarta.
+/// States (I11a/b): no channels, AI and source banners, skeleton while loading.
 struct FeedView: View {
     @Environment(Store.self) private var store
     @State private var channel: Int?
     @State private var showLascia = false
-    /// Screenshot launch argument -uiJob: open that detail right away.
+    @State private var newChannel = UIArgs.screen == "newChannel"
+    /// Screenshot launch arguments: -uiJob opens that detail, -uiScreen channels the channel list.
     @State private var deepLink: String? = UIArgs.tab == 0 ? UIArgs.job : nil
+    @State private var route: FeedRoute? = UIArgs.screen == "channels" ? .channels : nil
 
     var body: some View {
         let sections = store.sections(channel: channel)
         let lascia = sections.first { $0.decision == .lascia }
+        let loading = !store.loaded || UIArgs.loading
         List {
             Section {
+                if loading || store.refreshAllProgress != nil { LoadingSubtitle() }
                 StatusBanners()
-                ChannelChips(selected: $channel)
+                if !store.channels.isEmpty || loading { ChannelChips(selected: $channel) }
             }
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
 
-            ForEach(sections.filter { $0.decision != .lascia || showLascia }, id: \.decision) { s in
-                Section {
-                    ForEach(s.jobs) { job in JobRow(job: job) }
-                } header: {
-                    SectionHeader(title: s.decision.section, count: s.jobs.count)
+            if loading {
+                ForEach(0..<3, id: \.self) { _ in SkeletonCard() }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowSeparator(.hidden).listRowBackground(Color.clear)
+            } else {
+                ForEach(sections.filter { $0.decision != .lascia || showLascia }, id: \.decision) { s in
+                    Section {
+                        ForEach(s.jobs) { job in JobRow(job: job) }
+                    } header: {
+                        SectionHeader(title: s.decision.section, count: s.jobs.count)
+                    }
                 }
-            }
-            if let lascia, !showLascia {
-                Button("Mostra \(lascia.jobs.count) da lasciare") { showLascia = true }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                if let lascia, !showLascia {
+                    Button("Mostra \(lascia.jobs.count) da lasciare") { showLascia = true }
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Theme.background)
-        .overlay { LoadState(empty: sections.isEmpty, emptyIcon: "tray", emptyTitle: "Niente da decidere",
-                             emptyText: channel == nil ? "Hai valutato tutte le offerte. Le nuove arrivano col prossimo aggiornamento dei canali." : "Nessuna offerta da valutare in questo canale.") }
+        .overlay {
+            if !loading && store.error == nil && store.channels.isEmpty {
+                NoChannels { newChannel = true }
+            } else if !loading {
+                LoadState(empty: sections.isEmpty, emptyIcon: "tray", emptyTitle: "Niente da decidere",
+                          emptyText: channel == nil ? "Hai valutato tutte le offerte. Le nuove arrivano col prossimo aggiornamento dei canali." : "Nessuna offerta da valutare in questo canale.")
+            }
+        }
         .navigationTitle("Offerte")
-        .toolbar { AreaMenu() }
+        .toolbar { AreaMenu(); AvatarButton() }
         .navigationDestination(for: String.self) { url in JobDetailView(url: url) }
+        .navigationDestination(for: FeedRoute.self) { _ in ChannelsView() }
+        .navigationDestination(item: $route) { _ in ChannelsView() }
+        .navigationDestination(item: $deepLink) { JobDetailView(url: $0) }
         .refreshable { await store.loadAll(); if let channel { await store.loadChannel(channel) } }
         .task(id: channel) { if let channel, store.channelURLs[channel] == nil { await store.loadChannel(channel) } }
-        .navigationDestination(item: $deepLink) { JobDetailView(url: $0) }
+        .sheet(isPresented: $newChannel) { NavigationStack { ChannelFormView(channel: nil) } }
+    }
+}
+
+/// I11b: «Aggiornamento in corso · 2 canali su 3» under the title, no full-screen spinner.
+struct LoadingSubtitle: View {
+    @Environment(Store.self) private var store
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            if let p = store.refreshAllProgress {
+                Text("Aggiornamento in corso · \(p.done + 1 > p.total ? p.total : p.done + 1) canali su \(p.total)")
+            } else if UIArgs.loading {
+                Text("Aggiornamento in corso · 2 canali su 3")
+            } else {
+                Text("Carico le offerte…")
+            }
+        }
+        .font(.subheadline).foregroundStyle(Theme.mutedForeground)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Skeleton card: muted panel with border-coloured bars.
+struct SkeletonCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
+                bar(120, 22); bar(90, 22); bar(140, 12); bar(220, 18); bar(260, 12); bar(200, 12)
+            }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.muted, in: .rect(cornerRadius: 14))
+            HStack { bar(90, 16); Spacer() }.padding(.horizontal, 8).padding(.bottom, 6)
+        }
+        .padding(6)
+        .background(Theme.card, in: .rect(cornerRadius: 20))
+        .overlay { RoundedRectangle(cornerRadius: 20).stroke(Theme.border) }
+        .accessibilityHidden(true)
+    }
+    private func bar(_ w: CGFloat, _ h: CGFloat) -> some View {
+        Capsule().fill(Theme.border).frame(width: w, height: h)
+    }
+}
+
+/// I11a: feed without channels.
+struct NoChannels: View {
+    let create: () -> Void
+    @State private var help = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 34, weight: .medium))
+                .foregroundStyle(Theme.areaLavoro)
+                .frame(width: 88, height: 88).background(Theme.areaLavoroSoft, in: .circle)
+                .accessibilityHidden(true)
+            Text("Nessun canale").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            Text("Un canale è una ricerca salvata: JobSpy la ripete ogni mattina e ti porta qui le offerte nuove.")
+                .font(.subheadline).foregroundStyle(Theme.mutedForeground).multilineTextAlignment(.center)
+            Button(action: create) { Label("Nuovo canale", systemImage: "plus").frame(minHeight: 44).padding(.horizontal, 8) }
+                .buttonStyle(.borderedProminent).foregroundStyle(Theme.primaryForeground).buttonBorderShape(.capsule)
+            Button("Come funziona un canale") { help = true }.font(.subheadline).frame(minHeight: 44)
+        }
+        .padding(32)
+        .alert("Come funziona un canale", isPresented: $help) {
+            Button("Ho capito", role: .cancel) {}
+        } message: {
+            Text("Scegli le fonti, cosa cercare e dove. Alle 9 JobSpy cerca su ogni fonte, toglie i doppioni e fa valutare le offerte nuove all'AI. Le trovi nel Feed, divise per decisione.")
+        }
     }
 }
 
@@ -112,6 +202,15 @@ struct ChannelChips: View {
                         selected = selected == c.id ? nil : c.id
                     }
                 }
+                NavigationLink(value: FeedRoute.channels) {
+                    Image(systemName: "slider.horizontal.3").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.foreground)
+                        .frame(width: 44, height: 36).background(Theme.card, in: .capsule)
+                        .overlay { Capsule().stroke(Theme.border) }
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Canali")
             }
             .padding(.vertical, 4)
         }
@@ -141,18 +240,55 @@ struct ChannelChips: View {
     }
 }
 
-/// /status: AI not configured (amber) or analyses in progress (grey with spinner).
+/// I11b banners: AI not configured (amber, to Settings) and failed sources (red, «Riprova»).
 struct StatusBanners: View {
     @Environment(Store.self) private var store
+    @State private var settings = false
 
     var body: some View {
         if let s = store.status {
             if s.analyzer_configured == false {
-                Banner(kind: .warning, text: "AI non configurata: le offerte nuove restano «Non noto» finché sul server manca la chiave DeepSeek.")
-            } else if let n = s.analysis_pending, n > 0 {
-                Banner(kind: s.analysis_running == true ? .info : .warning,
-                       text: s.analysis_running == true ? "Analisi in corso: \(n) offerte in coda." : "\(n) offerte in attesa di analisi.")
+                Button { settings = true } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "sparkles")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("AI non configurata").fontWeight(.semibold)
+                            Text("Le offerte nuove restano «Non noto» finché sul server manca la chiave DeepSeek.").font(.footnote)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                    }
+                    .font(.subheadline).multilineTextAlignment(.leading)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .foregroundStyle(Theme.deadlineSoonForeground)
+                    .background(Theme.deadlineSoon, in: .rect(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Apre le Impostazioni")
+                .sheet(isPresented: $settings) { NavigationStack { SettingsView() } }
+            } else if let n = s.analysis_pending, n > 0, s.analysis_running == true {
+                Banner(kind: .info, text: "Analisi in corso: \(n) offerte in coda.")
             }
+        }
+        let failed = store.failedChannels
+        if !failed.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(failed.count == 1 ? "Errore della fonte · \(failed[0].title)" : "\(failed.count) canali non aggiornati").fontWeight(.semibold)
+                    Text(failed.count == 1 ? (store.channelErrors[failed[0].id] ?? "Ultimo aggiornamento non riuscito") : failed.map(\.title).joined(separator: ", "))
+                        .font(.footnote).foregroundStyle(Theme.foreground)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Riprova") { Task { await store.refreshAll(failed) } }
+                    .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
+                    .disabled(store.refreshAllProgress != nil)
+            }
+            .font(.subheadline).foregroundStyle(Theme.destructive)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Theme.destructiveSoft, in: .rect(cornerRadius: 14))
+            .overlay { RoundedRectangle(cornerRadius: 14).stroke(Theme.destructive) }
+            .accessibilityElement(children: .contain)
         }
     }
 }
@@ -183,10 +319,8 @@ struct LoadState: View {
     }
 }
 
-/// Area switcher (Lavoro; PA and Gare later) plus Canali and Impostazioni.
+/// Area switcher (Lavoro; PA and Gare later), shown with its name like I1.
 struct AreaMenu: ToolbarContent {
-    @State private var sheet: String? = UIArgs.screen
-
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Menu {
@@ -195,17 +329,32 @@ struct AreaMenu: ToolbarContent {
                     Button {} label: { Label("Concorsi PA · presto", systemImage: "building.columns") }.disabled(true)
                     Button {} label: { Label("Gare P.IVA · presto", systemImage: "doc.text.magnifyingglass") }.disabled(true)
                 }
-                Button { sheet = "channels" } label: { Label("Canali", systemImage: "dot.radiowaves.left.and.right") }
-                Button { sheet = "settings" } label: { Label("Impostazioni", systemImage: "gearshape") }
             } label: {
-                Label("Lavoro", systemImage: "briefcase.fill").labelStyle(.titleAndIcon).foregroundStyle(Theme.areaLavoro)
+                HStack(spacing: 6) {
+                    Image(systemName: "briefcase.fill").foregroundStyle(Theme.areaLavoro)
+                    Text("Lavoro").fontWeight(.semibold).foregroundStyle(Theme.foreground)
+                    Image(systemName: "chevron.down").font(.caption.weight(.bold)).foregroundStyle(Theme.mutedForeground)
+                }
+                .padding(.horizontal, 6)
+                .fixedSize()
             }
-            .accessibilityLabel("Area Lavoro, menu")
-            .sheet(item: Binding(get: { sheet.map(SheetID.init) }, set: { sheet = $0?.id })) { s in
-                NavigationStack { if s.id == "channels" { ChannelsView() } else { SettingsView() } }
-            }
+            .accessibilityLabel("Area Lavoro, cambia area")
         }
     }
+}
 
-    struct SheetID: Identifiable { let id: String }
+/// Avatar in the area colour: opens Settings as a sheet (I10).
+struct AvatarButton: ToolbarContent {
+    @State private var open = UIArgs.screen == "settings"
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { open = true } label: {
+                Image(systemName: "person.fill").font(.footnote).foregroundStyle(Theme.background)
+                    .frame(width: 32, height: 32).background(Theme.areaLavoro, in: .circle)
+            }
+            .accessibilityLabel("Impostazioni")
+            .sheet(isPresented: $open) { NavigationStack { SettingsView() } }
+        }
+    }
 }

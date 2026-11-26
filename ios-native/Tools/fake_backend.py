@@ -13,7 +13,9 @@ sys.path[:0] = [os.getcwd(), os.path.dirname(os.getcwd())]
 os.environ.setdefault("DEEPSEEK_API_KEY", "")
 import uvicorn  # noqa: E402
 
+import analyzer  # noqa: E402
 import app  # noqa: E402
+import cv_review  # noqa: E402
 import cv_match  # noqa: E402
 import storage  # noqa: E402
 
@@ -114,7 +116,10 @@ def seed():
     with storage._connect() as conn:  # one archived job for the Archivio view
         conn.execute("UPDATE jobs SET archived_at='2026-11-25 08:00:00', archive_reason='stale' WHERE job_url=?",
                      ("https://example.com/jobs/6",))
-    storage.create_cv("CV Mario Rossi", CV)
+    base = storage.create_cv("CV Mario Rossi", CV)
+    storage.create_cv("CV Mario Rossi → Azienda Esempio Srl Sviluppatore Python backend",
+                      CV.replace("PostgreSQL.", "PostgreSQL e Docker."), kind="tailored", parent_id=base,
+                      job_url="https://example.com/jobs/1", changes=["Aggiunto Docker, confermato"])
     storage.set_job_keywords("https://example.com/jobs/1", {
         "role": "Sviluppatore Python backend", "company": "Azienda Esempio Srl", "seniority": "mid", "experience_years": 2,
         "required_skills": ["Python", "FastAPI", "PostgreSQL", "Docker"], "preferred_skills": ["Kubernetes", "Redis"],
@@ -132,7 +137,21 @@ def fake_chat(_prompt, _user, _max_tokens):
     ]}
 
 
+def fake_review(cv_text, _facts="", _job=None):
+    return cv_review.normalize_review({
+        "observations": ["Il profilo è chiaro; manca un sommario di due righe in cima."],
+        "questions": ["Con quali database hai lavorato oltre a PostgreSQL?"],
+        "patches": [{"before": "Supporto agli utenti e manutenzione della rete aziendale.",
+                     "after": "Supporto a 40 utenti e manutenzione della rete aziendale.",
+                     "reason": "Esempio: un numero rende l'esperienza concreta (solo se vero)."}]}, cv_text)
+
+
 if __name__ == "__main__":
+    if os.environ.get("FAKE_EMPTY"):  # «nessun canale» state: empty DB, nothing seeded
+        storage.init_db()
+        uvicorn.run(app.app, host="127.0.0.1", port=int(os.environ.get("PORT", "8099")))
+        sys.exit()
     seed()
     cv_match._chat = fake_chat
+    analyzer.review_cv = fake_review
     uvicorn.run(app.app, host="127.0.0.1", port=int(os.environ.get("PORT", "8099")))
