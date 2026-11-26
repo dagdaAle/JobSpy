@@ -1,0 +1,94 @@
+{
+    "applications": {
+        "https://example.com/jobs/4": {
+            "job_url": "https://example.com/jobs/4",
+            "status": "applied",
+            "applied_on": "2026-11-10",
+            "notes": "",
+            "next_step": "Richiamare la selezione",
+            "follow_up_on": "2026-11-20",
+            "updated_at": "2026-11-26 09:24:29",
+            "cv_label": "",
+            "contact": "Ufficio personale",
+            "cv_id": null
+        },
+        "https://example.com/jobs/7": {
+            "job_url": "https://example.com/jobs/7",
+            "status": "interview",
+            "applied_on": "2026-11-05",
+            "notes": "",
+            "next_step": "Colloquio tecnico",
+            "follow_up_on": "2026-12-02",
+            "updated_at": "2026-11-26 09:24:29",
+            "cv_label": "",
+            "contact": "",
+            "cv_id": null
+        }
+    },
+    "count": 2,
+    "jobs": [
+        {
+            "job_url": "https://example.com/jobs/4",
+            "site": "indeed",
+            "title": "Tecnico IT di supporto",
+            "company": "Servizi Fittizi Srl",
+            "location": "San Giovanni Lupatoto, Veneto",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-24",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "is_new": false
+        },
+        {
+            "job_url": "https://example.com/jobs/7",
+            "site": "linkedin",
+            "title": "Analista funzionale",
+            "company": "Consulenze Demo Srl",
+            "location": "Verona, Veneto",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-22",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": null,
+            "feed_since": null,
+            "job_url_direct": null,
+            "is_new": false
+        }
+    ],
+    "feedback": {},
+    "analysis": {
+        "https://example.com/jobs/7": {
+            "assessment": {
+                "work_mode": "unknown",
+                "location_fit": "unknown",
+                "location_reason": "",
+                "confidence": "low",
+                "missing_requirements": []
+            },
+            "tags": [],
+            "summary": "",
+            "relevance_score": null,
+            "reasons": []
+        }
+    },
+    "analyzer_configured": false
+}

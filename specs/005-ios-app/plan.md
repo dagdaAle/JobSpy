@@ -33,7 +33,7 @@ Stesso schema di HNWatch (`~/Progetti/server-apps/hnwatch/ios-native`), già in 
   gratis e nessun file di font da licenziare nel bundle. Da rivedere con le tavole finali.
 - **Ricerca** sulle offerte già caricate (titolo, azienda, luogo, tag), niente nuova rotta.
 - **Firma**: `Config/Signing.xcconfig` (gitignored) con `DEVELOPMENT_TEAM`, esempio versionato.
-- **ATS**: http solo verso `localhost` e solo in Debug (fase di build come HNWatch).
+- **ATS**: nessuna eccezione; `localhost` è già esente da ATS (backend locale nel simulatore). Release: le Impostazioni accettano solo `https`.
 
 ## Verifica
 

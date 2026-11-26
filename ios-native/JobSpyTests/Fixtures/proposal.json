@@ -1,0 +1,17 @@
+{
+    "source_hash": "ce89c797075eddd53625d7047d5c9811bd83f49b007854155c99914ffe66ae59",
+    "patches": [
+        {
+            "before": "Sviluppo di API REST in Python con FastAPI e PostgreSQL.",
+            "after": "Sviluppo di API REST e microservizi in Python con FastAPI, PostgreSQL e Docker.",
+            "reason": "Porta \u00abmicroservizi\u00bb e \u00abDocker\u00bb, confermata da te.",
+            "keywords": [
+                "Docker",
+                "microservizi"
+            ]
+        }
+    ],
+    "rejected": 1,
+    "score_before": 47,
+    "score_after": 61
+}

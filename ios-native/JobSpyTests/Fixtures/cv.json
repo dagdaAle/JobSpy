@@ -1,0 +1,15 @@
+{
+    "cv": {
+        "id": 1,
+        "name": "CV Mario Rossi",
+        "kind": "base",
+        "parent_id": null,
+        "job_url": null,
+        "markdown": "# Mario Rossi\nSviluppatore software \u00b7 Verona \u00b7 mario.rossi@example.com\n\n## Esperienza\n### Sviluppatore backend \u2014 Azienda Esempio Srl (2023 \u2013 oggi)\n- Sviluppo di API REST in Python con FastAPI e PostgreSQL.\n- Automazione dei test e dei rilasci con GitHub Actions.\n\n### Stagista IT \u2014 Studio Demo Snc (2021 \u2013 2022)\n- Supporto agli utenti e manutenzione della rete aziendale.\n\n## Formazione\nLaurea in Informatica, Universit\u00e0 di Esempio (2021)\n\n## Competenze\nPython, FastAPI, SQL, Git, Linux\n",
+        "changes": [],
+        "is_default": true,
+        "created_at": "2026-11-26 09:24:29",
+        "updated_at": "2026-11-26 09:24:29",
+        "template": "europass"
+    }
+}

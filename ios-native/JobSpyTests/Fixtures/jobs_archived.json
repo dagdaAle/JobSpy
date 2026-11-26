@@ -1,0 +1,60 @@
+{
+    "applications": {},
+    "count": 1,
+    "jobs": [
+        {
+            "job_url": "https://example.com/jobs/6",
+            "site": "linkedin",
+            "title": "Sviluppatore Java senior",
+            "company": "Banca Esempio",
+            "location": "Milano, Lombardia",
+            "is_remote": false,
+            "job_type": null,
+            "date_posted": "2026-11-20",
+            "company_logo": null,
+            "salary_min": null,
+            "salary_max": null,
+            "salary_currency": null,
+            "salary_interval": null,
+            "source_origin": null,
+            "source_suspect": false,
+            "source_closed_at": null,
+            "first_seen_at": "2026-11-26 09:24:29",
+            "archived_at": "2026-11-25 08:00:00",
+            "feed_since": null,
+            "job_url_direct": null,
+            "is_new": false
+        }
+    ],
+    "feedback": {},
+    "analysis": {
+        "https://example.com/jobs/6": {
+            "assessment": {
+                "work_mode": "onsite",
+                "location_fit": "incompatible",
+                "location_reason": "Milano in presenza, fuori zona.",
+                "confidence": "medium",
+                "missing_requirements": [
+                    "Java",
+                    "Spring"
+                ],
+                "cv_match": [],
+                "blockers": [
+                    "Sede a Milano, presenza 5 giorni"
+                ],
+                "decision": "skip",
+                "seniority": "senior"
+            },
+            "tags": [
+                "Backend",
+                "Java"
+            ],
+            "summary": "Senior Java a Milano in presenza.",
+            "relevance_score": 20,
+            "reasons": [
+                "Senior Java a Milano in presenza."
+            ]
+        }
+    },
+    "analyzer_configured": false
+}

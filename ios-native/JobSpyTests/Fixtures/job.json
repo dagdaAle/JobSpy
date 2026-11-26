@@ -1,0 +1,71 @@
+{
+    "job": {
+        "job_url": "https://example.com/jobs/1",
+        "site": "linkedin",
+        "title": "Sviluppatore Python backend",
+        "company": "Azienda Esempio Srl",
+        "location": "Verona, Veneto",
+        "is_remote": false,
+        "job_type": "fulltime",
+        "date_posted": "2026-11-24",
+        "description": "Annuncio di prova per Sviluppatore Python backend presso Azienda Esempio Srl. Dati finti per lo sviluppo dell'app iOS.",
+        "seen_at": "2026-11-26 09:24:29",
+        "job_url_direct": null,
+        "company_url": null,
+        "company_industry": null,
+        "company_logo": null,
+        "banner_photo_url": null,
+        "job_level": null,
+        "job_function": null,
+        "salary_min": "38000",
+        "salary_max": "45000",
+        "salary_currency": "EUR",
+        "salary_interval": "yearly",
+        "emails": null,
+        "skills": "Python, FastAPI, PostgreSQL, Docker",
+        "first_seen_at": "2026-11-26 09:24:29",
+        "last_seen_at": "2026-11-26 09:24:29",
+        "archived_at": null,
+        "archive_reason": null,
+        "raw_json": "{\"company\": \"Azienda Esempio Srl\", \"date_posted\": \"2026-11-24\", \"description\": \"Annuncio di prova per Sviluppatore Python backend presso Azienda Esempio Srl. Dati finti per lo sviluppo dell'app iOS.\", \"job_type\": \"fulltime\", \"job_url\": \"https://example.com/jobs/1\", \"location\": \"Verona, Veneto\", \"salary_currency\": \"EUR\", \"salary_interval\": \"yearly\", \"salary_max\": 45000, \"salary_min\": 38000, \"site\": \"linkedin\", \"skills\": \"Python, FastAPI, PostgreSQL, Docker\", \"title\": \"Sviluppatore Python backend\"}",
+        "feed_since": null,
+        "source": null
+    },
+    "analysis": {
+        "assessment": {
+            "work_mode": "hybrid",
+            "location_fit": "compatible",
+            "location_reason": "Verona, in zona.",
+            "confidence": "medium",
+            "missing_requirements": [
+                "Docker"
+            ],
+            "cv_match": [
+                "Python",
+                "FastAPI",
+                "PostgreSQL",
+                "Git",
+                "Linux"
+            ],
+            "blockers": [],
+            "decision": "apply",
+            "seniority": "mid",
+            "stack": [
+                "Python",
+                "FastAPI",
+                "PostgreSQL"
+            ]
+        },
+        "tags": [
+            "Backend",
+            "Python",
+            "Ibrido"
+        ],
+        "summary": "Stack Python e FastAPI come nel CV, sede a Verona e RAL indicata.",
+        "relevance_score": 82,
+        "reasons": [
+            "Stack Python e FastAPI come nel CV, sede a Verona e RAL indicata."
+        ]
+    },
+    "feedback": null
+}
