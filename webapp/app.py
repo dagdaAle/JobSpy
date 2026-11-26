@@ -11,12 +11,15 @@ It is intentionally single-process and stateless except for:
 * the SQLite feedback DB (see ``storage.py``), and
 * the last search result kept in memory so ``/export`` can reuse it.
 
-This is meant for local, personal use (run via Docker); it does no auth.
+This is meant for local, personal use (run via Docker); it does no auth: Authentik guards the
+web login. Every API route is also served as ``/mobile/<route>`` for the iOS app, behind
+``X-Api-Key`` == ``MOBILE_API_KEY`` (see ``_MobileGate`` and docs/mobile-api.md).
 """
 
 from __future__ import annotations
 
 import datetime
+import hmac
 import io
 import math
 import os
@@ -28,9 +31,11 @@ from typing import Annotated, Any, Literal
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator
+from starlette.routing import Match, Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from jobspy.freehire import (
     FreehireClient,
@@ -1279,6 +1284,39 @@ def tailor_cv(req: CvTailorRequest) -> dict[str, Any]:
 
 app.include_router(pa.router)
 app.include_router(gare.router)
+
+
+class _MobileGate:
+    """
+    The iOS app can't do the Authentik web login, so ``^/mobile/`` is exempted
+    there and guarded here by ``X-Api-Key`` == ``MOBILE_API_KEY``. On success the
+    prefix is stripped and the request reaches the normal API routes (never the SPA).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith("/mobile/"):
+            return await self.app(scope, receive, send)
+        expected = os.environ.get("MOBILE_API_KEY", "")
+        given = dict(scope["headers"]).get(b"x-api-key", b"")
+        if not expected:
+            status, detail = 503, "accesso mobile non configurato"
+        elif not hmac.compare_digest(given, expected.encode()):
+            status, detail = 401, "chiave API non valida"
+        else:
+            scope = dict(scope, path=scope["path"][len("/mobile"):])
+            if scope.get("raw_path"):
+                scope["raw_path"] = scope["raw_path"][len(b"/mobile"):]
+            # Routes only (API + /openapi.json): an unknown path must not fall through to the static mount.
+            if any(r.matches(scope)[0] != Match.NONE for r in app.router.routes if isinstance(r, Route)):
+                return await self.app(scope, receive, send)
+            status, detail = 404, "Not Found"
+        await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
+
+
+app.add_middleware(_MobileGate)
 
 # Serve the SPA. Mounted last so API routes take precedence.
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
