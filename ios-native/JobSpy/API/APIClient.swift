@@ -114,6 +114,19 @@ nonisolated struct APIClient: Sendable {
     func status() async throws -> Status { try await get("/status") }
     func channels() async throws -> [Channel] { try await (get("/channels") as ChannelsResponse).channels }
     func refresh(channel id: Int) async throws { _ = try await send("/channels/\(id)/refresh", method: "POST", long: true) }
+    func sites() async throws -> [String] { try await (get("/channels") as ChannelsResponse).sites ?? [] }
+    /// Creating a channel runs its first scraping: long timeout.
+    func createChannel(_ b: ChannelBody) async throws -> ChannelCreated { try await get("/channels", method: "POST", body: b, long: true) }
+    func updateChannel(_ id: Int, _ b: ChannelBody) async throws { _ = try await send("/channels/\(id)", method: "PUT", body: b) }
+    func deleteChannel(_ id: Int) async throws { _ = try await send("/channels/\(id)", method: "DELETE") }
+    func logs(limit: Int = 100) async throws -> [LogEntry] {
+        struct R: Decodable { let logs: [LogEntry] }
+        return try await (get("/logs?limit=\(limit)") as R).logs
+    }
+    func freehireCompanies(_ q: String) async throws -> [FreehireCompany] {
+        struct R: Decodable { let companies: [FreehireCompany] }
+        return try await (get("/freehire/companies?q=\(Self.q(q))") as R).companies
+    }
 
     // offerte
     func jobs(archived: Bool = false) async throws -> JobsEnvelope { try await get("/jobs?archived=\(archived)") }
@@ -132,6 +145,37 @@ nonisolated struct APIClient: Sendable {
     // CV
     func cvs() async throws -> [CvSummary] { try await (get("/cvs") as CvsResponse).cvs }
     func cv(_ id: Int) async throws -> Cv { try await (get("/cvs/\(id)") as CvResponse).cv }
+    func pages(cv id: Int) async throws -> Int {
+        struct R: Decodable { let pages: Int }
+        return try await (get("/cvs/\(id)/preview") as R).pages
+    }
+    func setDefault(cv id: Int) async throws { _ = try await send("/cvs/\(id)/default", method: "POST") }
+    func deleteCv(_ id: Int) async throws { _ = try await send("/cvs/\(id)", method: "DELETE") }
+    func updateCv(_ id: Int, markdown: String) async throws {
+        _ = try await send("/cvs/\(id)", method: "PATCH", body: ["markdown": markdown])
+    }
+    /// Raw PDF body; the server extracts the text and stores it as Markdown.
+    func upload(pdf: Data, name: String) async throws -> Int {
+        var req = try request("/cvs/upload?name=\(Self.q(name))", method: "POST", long: true)
+        req.setValue("application/pdf", forHTTPHeaderField: "Content-Type")
+        req.httpBody = pdf
+        let (data, res) = try await session.data(for: req)
+        let status = (res as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw Self.error(status: status, data: data) }
+        struct R: Decodable { let id: Int }
+        return try Self.decoder.decode(R.self, from: data).id
+    }
+    func review(cv id: Int) async throws -> CvReview {
+        try await get("/cvs/\(id)/review", method: "POST", body: ["confirmed_facts": ""], long: true)
+    }
+    func revise(cv id: Int, _ body: RevisionBody) async throws -> Cv {
+        try await (get("/cvs/\(id)/revision", method: "POST", body: body) as CvResponse).cv
+    }
+    /// Server version from the OpenAPI schema (info.version).
+    func serverVersion() async throws -> String {
+        struct R: Decodable { struct Info: Decodable { let version: String? }; let info: Info? }
+        return try await (get("/openapi.json") as R).info?.version ?? "?"
+    }
     func match(cv id: Int, job url: String, refresh: Bool = false) async throws -> MatchReport {
         try await get("/cvs/\(id)/match?job_url=\(Self.q(url))\(refresh ? "&refresh=1" : "")", long: true)
     }

@@ -19,6 +19,11 @@ final class Store {
     var loading = false
     var error: APIError?
     var refreshing: Set<Int> = []
+    /// «Aggiornamento in corso · done canali su total» while refreshing every channel.
+    var refreshAllProgress: (done: Int, total: Int)?
+    /// Reason of the last failed refresh per channel (from /logs).
+    var channelErrors: [Int: String] = [:]
+    var sites: [String] = []
     var toast: Toast?
     /// Requests still running: the toast stays up until they end.
     var inFlight = 0
@@ -54,6 +59,7 @@ final class Store {
             async let v = api.cvs()
             (status, channels, active, tracked, cvs) = try await (s, c, j, t, v)
             error = nil
+            await loadChannelErrors()
             channelURLs = [:]
             if archive != nil { await loadArchive() }
         } catch {
@@ -214,6 +220,96 @@ final class Store {
             fail(error)
             if let c = try? await api.channels() { channels = c }
         }
+    }
+
+    func loadChannelErrors() async {
+        guard channels.contains(where: \.failed), let logs = try? await api.logs() else { channelErrors = [:]; return }
+        var out: [Int: String] = [:]
+        for l in logs where l.kind == "refresh" { // newest first: keep the latest per channel
+            guard let id = l.channel_id, out[id] == nil, channels.first(where: { $0.id == id })?.failed == true else { continue }
+            out[id] = l.error ?? "Errore della fonte"
+        }
+        channelErrors = out
+    }
+
+    var failedChannels: [Channel] { channels.filter(\.failed) }
+
+    /// Pull-to-refresh on Canali: one channel at a time (the server serializes scraping anyway).
+    func refreshAll(_ list: [Channel]? = nil) async {
+        let list = list ?? channels
+        guard !list.isEmpty, refreshAllProgress == nil else { return }
+        refreshAllProgress = (0, list.count)
+        var failed = 0
+        for c in list {
+            refreshing.insert(c.id)
+            do { try await api.refresh(channel: c.id) } catch { failed += 1 }
+            refreshing.remove(c.id)
+            refreshAllProgress?.done += 1
+        }
+        refreshAllProgress = nil
+        await loadAll()
+        show(failed == 0 ? "Canali aggiornati" : "\(failed) canali non aggiornati: vedi il motivo nella card", error: failed > 0)
+    }
+
+    func loadSites() async {
+        guard sites.isEmpty else { return }
+        sites = (try? await api.sites()) ?? Fmt.siteLabels.keys.sorted()
+    }
+
+    /// One channel per selected source (a backend channel has a single site).
+    func createChannels(_ body: ChannelBody, sites: [String]) async -> Bool {
+        var found = 0
+        for site in sites {
+            var b = body
+            b.site = site
+            if sites.count > 1 && !b.name.isEmpty { b.name += " · \(Fmt.site(site))" }
+            do { found += try await api.createChannel(b).new_count ?? 0 } catch {
+                fail(error)
+                await loadAll()
+                return false
+            }
+        }
+        show(sites.count == 1 ? "Canale creato: \(found) offerte trovate" : "\(sites.count) canali creati: \(found) offerte trovate")
+        await loadAll()
+        return true
+    }
+
+    func updateChannel(_ id: Int, _ body: ChannelBody) async -> Bool {
+        do {
+            try await api.updateChannel(id, body)
+            show("Canale aggiornato: i filtri valgono dal prossimo aggiornamento")
+            channels = try await api.channels()
+            return true
+        } catch { fail(error); return false }
+    }
+
+    func deleteChannel(_ c: Channel) async {
+        do {
+            try await api.deleteChannel(c.id)
+            channels.removeAll { $0.id == c.id }
+            show("Canale «\(c.title)» eliminato")
+            await loadAll()
+        } catch { fail(error) }
+    }
+
+    func setDefault(_ cv: CvSummary) async {
+        do { try await api.setDefault(cv: cv.id); show("«\(cv.name)» è il CV predefinito"); await reloadCvs() } catch { fail(error) }
+    }
+
+    func deleteCv(_ cv: CvSummary) async {
+        do { try await api.deleteCv(cv.id); show("CV eliminato"); await reloadCvs() } catch { fail(error) }
+    }
+
+    func upload(_ url: URL) async {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            guard data.count <= 5 * 1024 * 1024 else { show("PDF troppo grande (max 5 MB)", error: true); return }
+            _ = try await api.upload(pdf: data, name: url.deletingPathExtension().lastPathComponent)
+            show("CV caricato: il testo è diventato Markdown")
+            await reloadCvs()
+        } catch { fail(error) }
     }
 
     func reloadCvs() async {

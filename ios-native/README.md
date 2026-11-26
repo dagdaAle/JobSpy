@@ -39,7 +39,9 @@ xcrun simctl launch booted dev.intecha.jobspy
 ```
 
 Argomenti di lancio per gli screenshot: `-uiTab 0…4`, `-uiJob <job_url>` (con `-uiTab 0`),
-`-uiDetailTab cv`, `-uiSheet keywords|patches`, `-uiSaved 0|1|2`, `-uiScreen channels|settings`, `-uiSearch <testo>`.
+`-uiDetailTab cv`, `-uiSheet keywords|patches|review`, `-uiSaved 0|1|2`, `-uiScreen channels|newChannel|settings`,
+`-uiSearch <testo>`, `-uiCv <id>` (con `-uiTab 3`), `-uiLoading 1` (scheletri), `-serverURL <url>` (es. il backend
+vuoto: `FAKE_EMPTY=1 PORT=8098 … fake_backend.py`, per lo stato «Nessun canale»).
 
 ## Test
 
@@ -53,7 +55,11 @@ xcodebuild -scheme JobSpy -destination 'platform=iOS Simulator,name=iPhone 18 Pr
 - **Niente `convertFromSnakeCase`**: le mappe `analysis` / `feedback` / `applications` sono indicizzate per `job_url`.
 - **Font di sistema** (SF e SF Mono per i numeri) al posto di Outfit/Inter/JetBrains Mono: Dynamic Type senza
   file di font nel bundle. Da rivedere con le tavole definitive.
-- **Canali e CV in sola lettura**: creare o modificare canali e CV resta nella web app (v2).
+- **Canali**: creazione, modifica ed eliminazione (I7, I8). Le fonti sono a scelta multipla in creazione: il backend
+  ha un sito per canale, quindi l'app crea un canale per fonte.
+- **CV**: elenco, anteprima Markdown, predefinito, eliminazione, caricamento PDF, «Revisione AI» e un editor
+  Markdown semplice (I9a, I9b; il risultato della revisione e l'editor non hanno ancora una tavola).
+- **Impostazioni** come sheet dall'avatar (I10), tema Sistema/Chiaro/Scuro.
 
 ## Installazione sul telefono
 
