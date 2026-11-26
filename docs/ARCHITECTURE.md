@@ -14,7 +14,8 @@
                        MCPJungle  mcp.intecha.dev ──▶ mcp-backend (intecha-mcp)
                                                           │  HTTP rete Docker interna
                                                           ▼
-  Browser / telefono ──Authentik──▶  jobspy-api  (FastAPI + React buildato, 1 processo)
+  Browser ──Authentik──▶  jobspy-api  (FastAPI + React buildato, 1 processo)
+  App iOS ──/mobile/ + X-Api-Key──▶ ┘ (Authentik esclude ^/mobile/)
                                         │
                                         ├── SQLite  /data/feedback.db
                                         ├── scheduler  refresh canali 09:00 Europe/Rome → estrazione → valutazione
@@ -78,7 +79,7 @@ Conseguenze:
 | inPA | bandi nazionali considerati "in zona" | solo sedi nella provincia scelta; i nazionali esclusi o segnalati |
 | API | rotte piatte, errori stringa, nessun contratto | `/api/v1`, Problem Details, `openapi.json` committato |
 | MCP | tutto tranne CV e modifica canali | anche CV, tag, preferenze, candidature complete |
-| Auth | forward-auth Authentik; MCP dalla rete interna senza token | OIDC Authentik per web/mobile, token di servizio per l'MCP |
+| Auth | forward-auth Authentik; app iOS con `X-Api-Key` sotto `/mobile/`; MCP dalla rete interna senza token | OIDC Authentik per web, token di servizio per l'MCP |
 | Frontend | `App.tsx` con stato di vista in `useState` | pagine con URL, client generato |
 | Build | `webapp/static/` committata e anche ricostruita nel Dockerfile | `static/` fuori da git |
 | Tooling | pip, Python 3.11, `unittest` | `uv`, Python 3.13, `pytest` (la libreria resta su Poetry come upstream) |
@@ -156,6 +157,16 @@ Stessa app, stesso DB e stesso login; codice, tabelle, API e pagine separati
   decisione adatto / da valutare / non adatto è codice contro il profilo dell'area (in `meta`).
 - TED contiene solo gare sopra soglia UE: per una P.IVA sono soprattutto subappalto o raggruppamento.
 
+## Client iOS (26/11/2026)
+
+App SwiftUI in `ios-native/` ([spec 005](../specs/005-ios-app/spec.md)), stesso schema di HNWatch.
+- Non può fare il login web di Authentik: ogni rotta è servita anche come `/mobile/<rotta>`. `_MobileGate` in
+  `app.py` controlla `X-Api-Key` contro `MOBILE_API_KEY` (503 se manca sul server, 401 se sbagliata), toglie il
+  prefisso e passa solo a rotte API (anche `pa` e `gare`); un path sconosciuto è 404 JSON, mai la SPA.
+- Authentik esclude `^/mobile/`. La chiave sta nel Keychain del telefono, mai nel binario.
+- Decisione e componenti si calcolano sul client come nella web app (porting di `decision.tsx` e
+  `JobDetailSheet.tsx`): il backend non cambia. Contratto in [docs/mobile-api.md](mobile-api.md).
+
 ## Stack
 
 | Parte | Scelta |
@@ -167,6 +178,7 @@ Stessa app, stesso DB e stesso login; codice, tabelle, API e pagine separati
 | Database | SQLite sul volume `jobspy-data` (`/data/feedback.db`) — [adr/003](adr/003-sqlite-un-processo.md) |
 | Sede | tabella comuni ISTAT con coordinate, distanza in linea d'aria da Verona **(scelta di Claude)** |
 | Frontend | React 18 + TypeScript + Vite, TanStack Query, shadcn/Base UI, Tailwind 4 |
+| iOS | Swift 6, SwiftUI, iOS 18+, xcodegen, nessuna dipendenza |
 | Deploy | Docker multi-stage, Coolify, Authentik, `jobspy.intecha.dev` |
 
 ## MCP
