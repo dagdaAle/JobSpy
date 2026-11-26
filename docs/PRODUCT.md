@@ -65,7 +65,7 @@ Cosa non va, in ordine di peso:
 ## Principi trasversali (gli stessi di todo-app e BuyWatcher)
 
 - **Tutto interrogabile da un LLM via MCP**: ogni cosa visibile o fattibile nell'app lo è anche per Hermes, CV e candidature compresi.
-- **Pensata per il server e per più client**: web oggi, telefono domani, stessa API.
+- **Pensata per il server e per più client**: web e app iOS nativa, stessa API ([docs/mobile-api.md](mobile-api.md)).
 - **Backend fatto bene**: strati, migrazioni, contratto API stabile (ARCHITECTURE.md).
 - **Onestà sui dati**: ciò che non si sa resta "non noto". RAL assente non è zero, sede ignota non è incompatibile,
   dato mancante non è punteggio basso.
@@ -169,7 +169,9 @@ digitati dal bot, stop su CAPTCHA, al massimo ~5 invii all'ora sui portali azien
 - **Non** un bot che si candida da solo: l'invio resta una decisione di Ale, ogni volta.
 - **Non** una libreria di scraping da pubblicare: `jobspy/` resta il fork, il PyPI non si tocca.
 - **Non** un modello di machine learning addestrato: le preferenze sono pesi per tag, leggibili e modificabili.
-- **Non** multi-utente, **non** un'app mobile nativa.
+- **Non** multi-utente.
+- L'app mobile nativa non è più un non obiettivo (26/11/2026): un'app iOS SwiftUI per Ale, stessa API
+  sotto `/mobile/` ([spec 005](../specs/005-ios-app/spec.md)). v1 solo area Lavoro.
 
 ## Anti-obiettivi (se succede, il progetto è fallito anche se funziona)
 
